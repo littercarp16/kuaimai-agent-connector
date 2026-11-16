@@ -1,0 +1,1 @@
+{"id":"standard-plan-20261102","type":"plan.updated","payload":{"title":"Agent标准协议与交互改造","items":[{"id":"standard-contract","kind":"page","name":"协议与指令映射"},{"id":"standard-workspace","kind":"page","name":"交互与样式分离"},{"id":"standard-checks","kind":"table","name":"适配与验收状态"}]}}

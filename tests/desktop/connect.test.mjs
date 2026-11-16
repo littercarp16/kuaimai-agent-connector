@@ -1,0 +1,62 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { createConnectGrants, parseConnectURL, challengeFor } from '../../src/desktop/connect-grants.mjs';
+import { createDesktopHost } from '../../src/desktop/host.mjs';
+const origin='https://app.ltpass.com',random=()=>randomBytes(32).toString('base64url');
+const request=()=>{const verifier=random(),state=random();return{verifier,request:{origin,callback:origin+'/agent/connect-callback.html',state,challenge:challengeFor(verifier),browser:'chrome'}};};
+const link=r=>'km-agent://connect?'+new URLSearchParams(r);
+test('接入链接严格绑定配置来源、固定回调、浏览器枚举，不接受命令或重复参数',()=>{
+ const f=request();assert.deepEqual(parseConnectURL(link(f.request),[origin]),f.request);
+ for(const mutate of[r=>r.origin='https://evil.test',r=>r.callback='https://evil.test/agent/connect-callback.html',r=>r.callback=origin+'/redirect?to=evil',r=>r.callback=origin+'/agent/connect-callback.html#secret',r=>r.challenge='bad',r=>r.browser='/bin/sh',r=>r.command='open anything']){const r={...f.request};mutate(r);assert.throws(()=>parseConnectURL(link(r),[origin]));}
+ assert.throws(()=>parseConnectURL(link(f.request)+'&origin='+origin,[origin]));
+ for(const allowed of['https://app1.ltpass.com','http://lt.com:8085','http://local.lt.com:8251'])assert.equal(parseConnectURL(link({...f.request,origin:allowed,callback:allowed+'/agent/connect-callback.html'}),[allowed]).origin,allowed);
+});
+test('交换凭据短时单次，绑定实例、网页、state和PKCE；错误尝试不消费正确票据',()=>{
+ let now=0;const grants=createConnectGrants({now:()=>now}),f=request(),endpoint='http://127.0.0.1:22333',instanceId='instance';
+ const callback=new URL(grants.issue(f.request,{endpoint,instanceId}).callbackURL),data=Object.fromEntries(new URLSearchParams(callback.hash.slice(1)));
+ assert.ok(!callback.href.includes(f.verifier));
+ const consume={...data,verifier:f.verifier,websiteOrigin:origin,requestOrigin:endpoint};
+ for(const patch of[{verifier:random()},{state:random()},{websiteOrigin:'https://evil.test'},{requestOrigin:origin},{instanceId:'other'}])assert.throws(()=>grants.consume({...consume,...patch}));
+ assert.equal(grants.consume(consume).websiteOrigin,origin);assert.throws(()=>grants.consume(consume));
+ const late=new URL(grants.issue(f.request,{endpoint,instanceId}).callbackURL);now=120001;assert.throws(()=>grants.consume({...consume,...Object.fromEntries(new URLSearchParams(late.hash.slice(1)))}));
+});
+test('HTTP环境的SHA-256回退和Node标准算法结果一致',async()=>{
+ const context={TextEncoder,Uint8Array,Uint32Array,DataView,btoa:s=>Buffer.from(s,'binary').toString('base64')};context.globalThis=context;
+ runInNewContext(await readFile(new URL('../../web/desktop-connect.js',import.meta.url),'utf8'),context);
+ for(const value of['','abc',random(),'a'.repeat(1000)])assert.equal(context.KmDesktopConnector.challengeFor(value),challengeFor(value));
+});
+test('桌面宿主真实监听：自动端口、受控本机连接页、交换授权、撤销与文件权限',{timeout:10000},async t=>{
+ let hits=0;const blocker=createServer((req,res)=>{hits++;res.end();});blocker.listen(0,'127.0.0.1');await once(blocker,'listening');
+ const directory=await mkdtemp(join(tmpdir(),'km-desktop-host-'));
+ const host=createDesktopHost({directory,preferredPort:blocker.address().port,codexEnabled:false});
+ t.after(async()=>{await host.stop();await new Promise(r=>blocker.close(r));await rm(directory,{recursive:true,force:true});});
+ const initial=await host.start({origins:[origin]});assert.equal(initial.state,'running');assert.notEqual(Number(new URL(initial.endpoint).port),blocker.address().port);
+ assert.equal((await stat(join(directory,'connector.json'))).mode&0o777,0o600);
+ const cli=await promisify(execFile)(process.execPath,[fileURLToPath(new URL('../../publish.mjs',import.meta.url)),'--runtime',join(directory,'connector.json'),'status']);
+ assert.deepEqual(JSON.parse(cli.stdout),{ok:true,bindings:[]},'桌面发布入口使用自己的运行信息，不寻找项目 .runtime');
+ const page=await fetch(initial.endpoint+'/connect');assert.equal(page.status,200);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+ const f=request(),pending=host.inspectLink(link(f.request)),callback=new URL(host.authorize(pending.id).callbackURL),info=Object.fromEntries(new URLSearchParams(callback.hash.slice(1)));
+ const headers={Origin:initial.endpoint,'X-Km-Agent':'1','Content-Type':'application/json'};
+ const exchange=()=>fetch(initial.endpoint+'/v1/connect/exchange',{method:'POST',headers,body:JSON.stringify({ticket:info.ticket,state:info.state,verifier:f.verifier,websiteOrigin:origin})});
+ const result=await(await exchange()).json();assert.equal(result.ok,true);assert.equal(result.data.snapshot.instanceId,initial.instanceId);assert.equal(result.data.snapshot.binding,null);
+ assert.equal((await exchange()).status,403);
+ const token=result.data.token;
+ const snapshot=await fetch(initial.endpoint+'/v1/snapshot',{headers:{...headers,Authorization:'Bearer '+token}});assert.equal(snapshot.status,200);
+ assert.equal((await fetch(initial.endpoint+'/v1/snapshot',{headers:{'Sec-Fetch-Site':'same-origin',Authorization:'Bearer '+token}})).status,200);
+ assert.equal((await fetch(initial.endpoint+'/v1/snapshot',{headers:{'Sec-Fetch-Site':'same-origin'}})).status,401);
+ assert.equal((await fetch(initial.endpoint+'/v1/snapshot',{headers:{Authorization:'Bearer '+token}})).status,403);
+ assert.equal((await fetch(initial.endpoint+'/v1/snapshot',{headers:{...headers,Origin:origin,Authorization:'Bearer '+token}})).status,401);
+ assert.equal((await fetch(initial.endpoint+'/v1/handshake',{method:'POST',headers,body:'{}'})).status,403);
+ assert.equal((await fetch(initial.endpoint+'/v1/local/publish',{method:'POST',headers:{...headers,Authorization:'Bearer '+token},body:'{}'})).status,403);
+ assert.equal(hits,0);await host.stop();assert.equal(host.status().state,'stopped');await assert.rejects(readFile(join(directory,'connector.json')),{code:'ENOENT'});
+});

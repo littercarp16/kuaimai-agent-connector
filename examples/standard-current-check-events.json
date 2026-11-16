@@ -1,0 +1,176 @@
+{
+  "notice": "真实当前会话UI验收；数据是历史快照，非重新查询",
+  "sourceQueriedAt": "2026-11-02T14:58:17.691Z",
+  "events": [
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-0",
+      "type": "plan.updated",
+      "payload": {
+        "title": "标准协议实际会话验收",
+        "items": [
+          {
+            "id": "sales-report",
+            "kind": "page",
+            "name": "销售增长观察 · 独立风格"
+          }
+        ]
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-1",
+      "type": "resource.create",
+      "payload": {
+        "id": "sales-report",
+        "kind": "page",
+        "name": "销售增长观察 · 独立风格",
+        "appearance": {
+          "theme": "ink",
+          "accent": "#d6f36a",
+          "layout": "editorial"
+        }
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-2",
+      "type": "work.status",
+      "payload": {
+        "artifactId": "sales-report",
+        "status": "running",
+        "label": "正在装配独立风格报表"
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-3",
+      "type": "artifact.updated",
+      "payload": {
+        "id": "sales-report",
+        "kind": "page",
+        "name": "销售增长观察 · 独立风格",
+        "description": "历史数据快照，查询时间2026-11-02T14:58:17.691Z，本次未重新查询平台。用于当前真实会话UI指令验收；未保存或发布。",
+        "metrics": [
+          {
+            "label": "平台视图销售金额",
+            "value": "187,885,900.49",
+            "hint": "按原生视图统计，未换算币种"
+          },
+          {
+            "label": "平台视图销售数",
+            "value": "1,433,115",
+            "hint": "不是订单数或客户数"
+          },
+          {
+            "label": "视图覆盖统计日",
+            "value": "75",
+            "hint": "2026-07-01—2026-09-13"
+          },
+          {
+            "label": "可核验明细样本",
+            "value": "200",
+            "hint": "首批明细，不是全量分母"
+          }
+        ],
+        "chart": {
+          "labels": [
+            "09-07",
+            "09-08",
+            "09-09",
+            "09-10",
+            "09-11",
+            "09-12",
+            "09-13"
+          ],
+          "values": [
+            2829910.22,
+            2910326.99,
+            3440037.4,
+            3393837.71,
+            3477014.43,
+            4119903.53,
+            3894365.72
+          ],
+          "type": "line"
+        },
+        "sections": [],
+        "appearance": {
+          "theme": "ink",
+          "accent": "#d6f36a",
+          "layout": "editorial"
+        }
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-4",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "scope",
+          "title": "范围与数据质量",
+          "text": "平台汇总来自现有透视视图，覆盖2026-07-01至2026-09-13的75个统计日，不与200行明细样本混算。明细接口total=0但实际有返回行，数量元信息矛盾，未作为总数或比率分母。报表仅使用视图汇总和样本数量，不展示客户个人字段，也不根据样本虚构利润、客单价或退款率。"
+        }
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-5",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "trend",
+          "title": "最后7个有数据日的趋势",
+          "text": "2026-09-07—2026-09-13的视图销售金额为24,065,396.00。相对前7个有数据日变化+39.01%。这不是相对今天的“近7日”，也不是同比。"
+        }
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-6",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "peak",
+          "title": "销售峰值与后续核验",
+          "text": "视图范围内最高统计日为2026-09-12，金额4,119,903.53，占本视图金额合计2.19%。建议在相同时间窗按店铺、商品、活动及退款状态拆解核对；当前没有足够证据推断增长原因。"
+        }
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-7",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "action",
+          "title": "建议动作与边界",
+          "text": "先确认视图筛选、日期定义和销售金额是否含退款，再做渠道贡献、商品结构与价格变化的对照。商品排名与退款分析需全量受控聚合，不应把首200行样本当作结论。当前只生成网页预览，未建表、保存平台草稿或发布页面。"
+        }
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-8",
+      "type": "work.status",
+      "payload": {
+        "artifactId": "sales-report",
+        "status": "completed",
+        "label": "历史快照界面已装配"
+      }
+    },
+    {
+      "protocol": "km-agent/1",
+      "id": "standard-current-1793637185505-9",
+      "type": "artifact.ready",
+      "payload": {
+        "artifactId": "sales-report"
+      }
+    }
+  ]
+}

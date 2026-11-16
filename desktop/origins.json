@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "origins": [
+    "https://app.ltpass.com",
+    "https://app1.ltpass.com",
+    "http://lt.com:8085",
+    "http://local.lt.com:8251",
+    "http://127.0.0.1:4173"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "sales-scope-refinement-57007daf-cc7f-4eb9-8c84-d6300ee1b1dc",
+  "type": "page.section.updated",
+  "payload": {
+    "artifactId": "sales-report",
+    "section": {
+      "id": "scope",
+      "title": "范围与数据质量",
+      "text": "平台汇总来自现有透视视图，覆盖2026-07-01至2026-09-13的75个统计日，不与200行明细样本混算。明细接口total=0但实际有返回行，数量元信息矛盾，未作为总数或比率分母。报表仅使用视图汇总和样本数量，不展示客户个人字段，也不根据样本虚构利润、客单价或退款率。"
+    }
+  }
+}

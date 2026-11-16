@@ -1,0 +1,248 @@
+{
+  "notice": "本机报表快照；重放仅载入历史预览，不代表重新读取当前数据",
+  "queriedAt": "2026-11-02T14:58:17.691Z",
+  "source": {
+    "tableId": 1752,
+    "viewId": 839,
+    "sampleRows": 200,
+    "days": 75,
+    "range": [
+      "2026-07-01",
+      "2026-09-13"
+    ]
+  },
+  "events": [
+    {
+      "id": "sales-1793631497691-0",
+      "type": "plan.updated",
+      "payload": {
+        "title": "订单商品明细 · 智能销售分析",
+        "items": [
+          {
+            "id": "sales-report",
+            "kind": "page",
+            "name": "智能销售主题分析"
+          },
+          {
+            "id": "sales-evidence",
+            "kind": "table",
+            "name": "销售趋势核验"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sales-1793631497710-1",
+      "type": "step.updated",
+      "payload": {
+        "id": "read-sales",
+        "label": "只读获取订单商品明细与平台透视",
+        "status": "running",
+        "detail": "区分平台视图汇总和明细样本，不修改订单。"
+      }
+    },
+    {
+      "id": "sales-1793631499584-2",
+      "type": "step.updated",
+      "payload": {
+        "id": "read-sales",
+        "label": "读取完成并核对来源",
+        "status": "completed",
+        "detail": "平台视图75个统计日；明细仅首200行样本。"
+      }
+    },
+    {
+      "id": "sales-1793631499586-3",
+      "type": "step.updated",
+      "payload": {
+        "id": "analyze-sales",
+        "label": "分析销售趋势与口径风险",
+        "status": "running"
+      }
+    },
+    {
+      "id": "sales-1793631499602-4",
+      "type": "artifact.updated",
+      "payload": {
+        "id": "sales-report",
+        "kind": "page",
+        "name": "智能销售主题分析",
+        "description": "数据源：订单商品明细1752，平台已有透视视图839的底部按日汇总；范围2026-07-01至2026-09-13。金额单位沿用原视图，未换算币种；不是全企业全量承诺。查询时间2026-11-02T14:58:17.691Z。",
+        "metrics": [
+          {
+            "label": "平台视图销售金额",
+            "value": "187,885,900.49",
+            "hint": "按原生视图统计，未换算币种"
+          },
+          {
+            "label": "平台视图销售数",
+            "value": "1,433,115",
+            "hint": "不是订单数或客户数"
+          },
+          {
+            "label": "视图覆盖统计日",
+            "value": "75",
+            "hint": "2026-07-01—2026-09-13"
+          },
+          {
+            "label": "可核验明细样本",
+            "value": "200",
+            "hint": "首批明细，不是全量分母"
+          }
+        ],
+        "chart": {
+          "labels": [
+            "09-07",
+            "09-08",
+            "09-09",
+            "09-10",
+            "09-11",
+            "09-12",
+            "09-13"
+          ],
+          "values": [
+            2829910.22,
+            2910326.99,
+            3440037.4,
+            3393837.71,
+            3477014.43,
+            4119903.53,
+            3894365.72
+          ]
+        },
+        "sections": []
+      }
+    },
+    {
+      "id": "sales-1793631499603-5",
+      "type": "artifact.focus",
+      "payload": {
+        "artifactId": "sales-report"
+      }
+    },
+    {
+      "id": "sales-1793631499605-6",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "scope",
+          "title": "范围与数据质量",
+          "text": "平台汇总来自现有透视视图，覆盖2026-07-01至2026-09-13的75个统计日，不与200行明细样本混算。明细接口total=0但实际有返回行，数量元信息矛盾，未作为总数或比率分母。报表仅使用视图汇总和样本数量，不展示客户个人字段，也不根据样本虚构利润、客单价或退款率。"
+        }
+      }
+    },
+    {
+      "id": "sales-1793631499605-7",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "trend",
+          "title": "最后7个有数据日的趋势",
+          "text": "2026-09-07—2026-09-13的视图销售金额为24,065,396.00。相对前7个有数据日变化+39.01%。这不是相对今天的“近7日”，也不是同比。"
+        }
+      }
+    },
+    {
+      "id": "sales-1793631499607-8",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "peak",
+          "title": "销售峰值与后续核验",
+          "text": "视图范围内最高统计日为2026-09-12，金额4,119,903.53，占本视图金额合计2.19%。建议在相同时间窗按店铺、商品、活动及退款状态拆解核对；当前没有足够证据推断增长原因。"
+        }
+      }
+    },
+    {
+      "id": "sales-1793631499608-9",
+      "type": "page.section.updated",
+      "payload": {
+        "artifactId": "sales-report",
+        "section": {
+          "id": "action",
+          "title": "建议动作与边界",
+          "text": "先确认视图筛选、日期定义和销售金额是否含退款，再做渠道贡献、商品结构与价格变化的对照。商品排名与退款分析需全量受控聚合，不应把首200行样本当作结论。当前只生成网页预览，未建表、保存平台草稿或发布页面。"
+        }
+      }
+    },
+    {
+      "id": "sales-1793631499609-10",
+      "type": "artifact.updated",
+      "payload": {
+        "id": "sales-evidence",
+        "kind": "table",
+        "name": "销售趋势核验",
+        "description": "核验表来自相同平台视图的最后7个有数据日，不是明细抽样合计。",
+        "columns": [
+          "统计日",
+          "平台销售数",
+          "平台销售金额"
+        ],
+        "rows": [
+          [
+            "2026-09-07",
+            20720,
+            "2829910.22"
+          ],
+          [
+            "2026-09-08",
+            21135,
+            "2910326.99"
+          ],
+          [
+            "2026-09-09",
+            23758,
+            "3440037.40"
+          ],
+          [
+            "2026-09-10",
+            23452,
+            "3393837.71"
+          ],
+          [
+            "2026-09-11",
+            24410,
+            "3477014.43"
+          ],
+          [
+            "2026-09-12",
+            26681,
+            "4119903.53"
+          ],
+          [
+            "2026-09-13",
+            26431,
+            "3894365.72"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "sales-1793631499609-11",
+      "type": "artifact.ready",
+      "payload": {
+        "artifactId": "sales-evidence"
+      }
+    },
+    {
+      "id": "sales-1793631499610-12",
+      "type": "artifact.ready",
+      "payload": {
+        "artifactId": "sales-report"
+      }
+    },
+    {
+      "id": "sales-1793631499610-13",
+      "type": "step.updated",
+      "payload": {
+        "id": "analyze-sales",
+        "label": "趋势与口径核验预览完成",
+        "status": "completed",
+        "detail": "预览完成，不等于平台保存或发布。"
+      }
+    }
+  ]
+}

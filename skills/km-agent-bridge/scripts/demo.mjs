@@ -1,0 +1,37 @@
+import{mkdir,writeFile}from'node:fs/promises';import{join}from'node:path';import{randomUUID}from'node:crypto';
+export async function prepareDemo(out){
+ const prefix='demo-'+randomUUID().slice(0,8),page=prefix+'-page',table=prefix+'-table',task=prefix+'-task',events=[];
+ const add=(type,payload)=>events.push({protocol:'km-agent/1',id:prefix+'-'+String(events.length+1).padStart(3,'0'),type,payload});
+ const notice='固定模拟数据；本地联调预览，未保存、未发布、未运行。';
+ add('plan.updated',{title:'AI交互联调 · 模拟数据',items:[{id:page,kind:'page',name:'演示概览'},{id:table,kind:'table',name:'演示商品表'},{id:task,kind:'task',name:'演示任务草案'}]});
+ add('panel.open',{mode:'workspace'});
+ add('run.note',{text:notice+'按顺序验证页面、表格、编辑、模拟失败恢复及窗口切换；不调用业务接口。'});
+ add('activity.updated',{id:prefix+'-phase',kind:'phase',label:'装配联调预览',status:'running',detail:'公开动作说明，不是内部推理。'});
+ add('step.updated',{id:prefix+'-page-step',label:'正在创建页面预览',status:'running'});
+ add('resource.create',{id:page,kind:'page',name:'演示概览',appearance:{theme:'ink',accent:'#d6f36a'}});
+ add('work.status',{artifactId:page,status:'running',label:'正在创建页面 · 联调预览'});
+ add('artifact.updated',{id:page,kind:'page',name:'演示概览',description:notice,appearance:{theme:'ink',accent:'#d6f36a'},metrics:[{label:'模拟销售额',value:'¥12,800',hint:'固定样例'}],chart:{type:'line',labels:['周一','周二','周三'],values:[12,18,21]},sections:[]});
+ add('page.section.updated',{artifactId:page,section:{id:'scope',title:'数据范围',text:notice}});
+ add('page.section.updated',{artifactId:page,section:{id:'advice',title:'建议初稿',text:'本区块稍后定点更新。'}});
+ add('artifact.ready',{artifactId:page});add('work.status',{artifactId:page,status:'completed',label:'页面预览已就绪'});
+ add('resource.create',{id:table,kind:'table',name:'演示商品表'});
+ add('work.status',{artifactId:table,status:'running',label:'正在创建表格 · 联调预览'});
+ add('artifact.updated',{id:table,kind:'table',name:'演示商品表',description:notice,columns:['商品','模拟销量'],rows:[],interactions:{search:true,sort:true}});
+ add('table.rows.append',{artifactId:table,rows:[['DEMO-A',12],['DEMO-B',8]]});
+ add('work.status',{artifactId:table,status:'waiting',label:'等待第二批固定模拟行'});
+ add('table.rows.append',{artifactId:table,rows:[['DEMO-C',6]]});
+ add('artifact.ready',{artifactId:table});add('work.status',{artifactId:table,status:'completed',label:'表格预览已就绪'});
+ add('resource.edit',{artifactId:page});add('page.section.updated',{artifactId:page,section:{id:'advice',title:'建议已更新',text:'按稳定区块ID更新；数据范围不变。仅为联调，不构成真实经营建议。'}});
+ add('resource.create',{id:task,kind:'task',name:'演示任务草案'});
+ add('artifact.updated',{id:task,kind:'task',name:'演示任务草案',description:notice,code:'// 仅文本，不执行。触发时间尚未填写。'});
+ add('work.status',{artifactId:task,status:'failed',label:'模拟校验失败：触发时间缺失（非真实接口错误）'});
+ add('work.status',{artifactId:task,status:'running',label:'演示恢复：只补齐文本，不执行任务'});
+ add('artifact.updated',{id:task,kind:'task',name:'演示任务草案',description:notice,code:'// 联调示意：每天09:00。\n// 未启用调度、不读取数据、不执行。'});
+ add('artifact.ready',{artifactId:task});add('work.status',{artifactId:task,status:'completed',label:'任务文本草案已就绪，未部署'});
+ add('resource.open',{artifactId:table});add('artifact.focus',{artifactId:table});add('panel.close',{});add('panel.open',{mode:'side'});add('resource.open',{artifactId:page});add('artifact.focus',{artifactId:page});
+ add('activity.updated',{id:prefix+'-phase',kind:'phase',label:'装配联调预览',status:'completed',detail:'仅预览；实际展示以回执为准。'});
+ add('step.updated',{id:prefix+'-page-step',label:'联调事件已生成',status:'completed'});
+ add('run.note',{text:'三个模拟预览待按实际回执验收；不把accepted当成applied。'+notice});
+ await mkdir(out,{mode:0o700});const files=[];for(const [i,event]of events.entries()){const name=String(i+1).padStart(3,'0')+'-'+event.type+'.json';await writeFile(join(out,name),JSON.stringify(event,null,2),{flag:'wx',mode:0o600});files.push(name);}await writeFile(join(out,'index.json'),JSON.stringify({protocol:'km-agent/1',prefix,files,notice:'仅生成事件文件，没有发送指令或访问网络。'},null,2),{flag:'wx',mode:0o600});
+ return{directory:out,files:files.length,commands:15,sent:false,notice:'逐个publish并核验receipt；模板中的模拟失败是显式演示，不执行真实失败操作。'};
+}

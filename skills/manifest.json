@@ -1,0 +1,20 @@
+{
+  "id": "km-agent-bridge",
+  "version": "1.4.0",
+  "protocol": "km-agent/1",
+  "files": [
+    "SKILL.md",
+    "scripts/bridge.mjs",
+    "scripts/demo.mjs",
+    "scripts/prepare.mjs",
+    "scripts/mcp-entry.mjs",
+    "references/commands.json",
+    "references/connection.md",
+    "references/protocol.md",
+    "references/agent-compatibility.md",
+    "references/workbuddy.md",
+    "references/automatic.md",
+    "references/codex.md",
+    "examples/connection.example.json"
+  ]
+}

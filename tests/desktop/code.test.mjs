@@ -1,0 +1,49 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, readFile, stat, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { ensureService, control, connectService, decodeRequest, privateDirectory } from '../../src/headless/service.mjs';
+import { challengeFor, createConnectGrants } from '../../src/desktop/connect-grants.mjs';
+const random = () => randomBytes(32).toString('base64url');
+const origin = 'http://local.lt.com:8251';
+function request() { const verifier = random(), state = random(); const url = 'km-agent://connect?' + new URLSearchParams({ origin, callback: origin + '/agent/connect-callback.html', state, challenge: challengeFor(verifier), browser: 'chrome' }); return { verifier, encoded: Buffer.from(JSON.stringify({ url, created: Date.now() })).toString('base64url') }; }
+test('代码连接请求过期/来源/回调检查与私有目录链接拒绝', async t => {
+  const r = request(); assert.equal(decodeRequest(r.encoded).origin, origin);
+  assert.throws(() => decodeRequest(r.encoded, Date.now() + 1800001));
+  const modified = JSON.parse(Buffer.from(r.encoded,'base64url')); modified.url += '&command=rm';
+  assert.throws(() => decodeRequest(Buffer.from(JSON.stringify(modified)).toString('base64url')));
+  const root = await mkdtemp(join(tmpdir(),'km-code-path-')); t.after(() => rm(root,{recursive:true,force:true}));
+  await symlink(root,join(root,'link')); await assert.rejects(privateDirectory(join(root,'link','child')));
+});
+test('纯代码后台启动、端口冲突、复用、来源隔离和关闭',{timeout:30000},async t => {
+  const directory = await mkdtemp('/private/tmp/km-code-'), blocker = createServer((req,res) => res.end('other'));
+  blocker.listen(0,'127.0.0.1'); await once(blocker,'listening');
+  t.after(async () => { await control(directory,{action:'stop'}).catch(()=>{}); blocker.close(); await delay(200); await rm(directory,{recursive:true,force:true}); });
+  const options = { origin, directory, port: blocker.address().port };
+  const first = await ensureService(options); assert.equal(first.loginStartup,false); assert.notEqual(Number(new URL(first.endpoint).port), options.port);
+  const second = await ensureService(options); assert.equal(second.pid,first.pid); assert.equal(second.reused,true);
+  const r = request(), connected = await connectService(r.encoded,options);
+  assert.equal(connected.endpoint,first.endpoint); assert.equal(connected.reused,true);
+  const data = Object.fromEntries(new URLSearchParams(new URL(connected.callbackURL).hash.slice(1)));
+  const headers = { Origin:first.endpoint,'Content-Type':'application/json','X-Km-Agent':'1' };
+  const exchange = await fetch(first.endpoint+'/v1/connect/exchange',{method:'POST',headers,body:JSON.stringify({...Object.fromEntries(['ticket','state'].map(k=>[k,data[k]])),verifier:r.verifier,websiteOrigin:origin})});
+  const result = await exchange.json(); assert.equal(exchange.status,200); assert.ok(result.data.reconnectToken);
+  assert.equal((await stat(join(directory,'control.sock'))).mode&0o777,0o600);
+  assert.equal((await fetch(first.endpoint+'/v1/health',{headers:{Origin:origin,'X-Km-Agent':'1'}})).status,200);
+  const resume = o => fetch(first.endpoint+'/v1/connect/resume',{method:'POST',headers,body:JSON.stringify({websiteOrigin:o,reconnectToken:result.data.reconnectToken})});
+  assert.equal((await resume('https://evil.example')).status,403); assert.equal((await resume(origin)).status,200);
+  assert.equal((await fetch(first.endpoint+'/v1/connect/resume',{method:'POST',headers:{...headers,Origin:origin},body:JSON.stringify({websiteOrigin:origin,reconnectToken:result.data.reconnectToken})})).status,403);
+  await control(directory,{action:'stop'}); await delay(300); await assert.rejects(readFile(join(directory,'connector.json')),{code:'ENOENT'});
+});
+test('重连授权仅在当前实例和已授权来源内有效且会到期',()=>{
+  let now=0;const grants=createConnectGrants({reconnect:true,now:()=>now}),r=request(),parsed=decodeRequest(r.encoded),endpoint='http://127.0.0.1:19234',instanceId='fixture';
+  const ticket=new URLSearchParams(new URL(grants.issue(parsed,{endpoint,instanceId}).callbackURL).hash.slice(1)).get('ticket');
+  const {reconnectToken}=grants.consume({ticket,state:parsed.state,verifier:r.verifier,websiteOrigin:origin,requestOrigin:endpoint,endpoint,instanceId});
+  const resume={reconnectToken,websiteOrigin:origin,requestOrigin:endpoint,endpoint,instanceId};
+  assert.equal(grants.resume(resume).websiteOrigin,origin);assert.throws(()=>grants.resume({...resume,instanceId:'other'}));now=8*3600e3;assert.throws(()=>grants.resume(resume));
+});

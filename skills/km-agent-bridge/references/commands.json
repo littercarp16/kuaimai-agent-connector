@@ -1,0 +1,22 @@
+{
+  "protocol": "km-agent/1",
+  "version": "1.4.0",
+  "limits": {"eventBytes": 19000},
+  "commands": {
+    "resource.create": {"payload":"{id,kind:page|table|dashboard|task,name,appearance?}","effect":"创建本地未保存预览并呼出编辑，不创建平台资源"},
+    "resource.open": {"payload":"{artifactId}","effect":"呼出并查看已有成果"},
+    "resource.edit": {"payload":"{artifactId}","effect":"编辑已有成果，不使用create覆盖"},
+    "panel.open": {"payload":"{mode:side|workspace}","effect":"打开协作侧栏或工作区"},
+    "panel.close": {"payload":"{}","effect":"收起窗口，不中断执行"},
+    "work.status": {"payload":"{artifactId,status:running|waiting|completed|failed,label}","effect":"显示目标的真实构建/等待/失败反馈"},
+    "activity.updated": {"payload":"{id,kind:phase|skill|tool|thinking|permission,label,status,detail?}","effect":"公开活动；不伪造工具，不传私有推理"},
+    "plan.updated": {"payload":"{title,items:[{id,kind,name}]}","effect":"发送构建清单"},
+    "step.updated": {"payload":"{id,label,status,detail?}","effect":"更新公开阶段"},
+    "artifact.updated": {"payload":"{id,kind,name,description?,appearance?,metrics?,chart?,sections?,columns?,rows?,code?,document?,interactions?}","effect":"装配成果，默认building；不是平台保存"},
+    "page.section.updated": {"payload":"{artifactId,section:{id,title,text}}","effect":"按稳定区块ID追加/替换，不覆盖其他区块"},
+    "table.rows.append": {"payload":"{artifactId,rows}","effect":"向已有表格预览追加受限行"},
+    "artifact.focus": {"payload":"{artifactId}","effect":"跟随模式聚焦，用户阅读保护可能延迟"},
+    "artifact.ready": {"payload":"{artifactId}","effect":"预览就绪，非平台保存/发布"},
+    "run.note": {"payload":"{text}","effect":"发送公开过程说明"}
+  }
+}
