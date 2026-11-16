@@ -103,6 +103,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   }
   function authenticate(req,origin){const token=req.headers.authorization?.replace(/^Bearer /,'');const client=token&&clients.get(token);if(!client||!client.active||client.origin!==origin||client.expires<now())fail(401,'连接授权已失效，请重新配对');return client;}
   function makeClient(origin){if(clients.size>=12)fail(409,'本次连接器授权数已达上限');const token=randomBytes(32).toString('base64url'),client={origin,active:true,expires:now()+8*3600e3,revision:0,sessionId:null,run:null,streams:new Set(),requests:new Map()};follow.init(client,autoTrust?.origin===origin);clients.set(token,client);return{token,client};}
+  function releaseDirectClient(token){const client=clients.get(token);if(!client)return;client.active=false;clearTimeout(client.timer);for(const stream of client.streams)stream.end();clients.delete(token);follow.reconcile();void detach(client).catch(()=>{});}
   async function body(req,keys,limit=20000){if(!req.headers['content-type']?.startsWith('application/json')||req.headers['x-km-agent']!=='1')fail(415,'需要受控的JSON请求');const chunks=[];let bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>limit)fail(413,'请求内容过长');chunks.push(chunk);}let value;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{fail(400,'JSON格式无效');}if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!keys.includes(key)))fail(400,'请求字段不符合约定');return value;}
   function updateOutput(client,messages) {
     const run=client.run,artifacts=new Map();let plan=null;const warnings=[];
@@ -219,6 +220,28 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Vary','Origin');
       if(req.method==='OPTIONS'){res.setHeader('Access-Control-Allow-Methods','GET, POST, OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization, X-Km-Agent');res.setHeader('Access-Control-Allow-Private-Network','true');res.writeHead(204);res.end();return;}
       rate(origin+':requests',180);
+      if(req.url==='/v1/connect/discover'&&req.method==='GET'){
+        if(!desktopConnect?.direct)fail(404,'原页面连接入口未启用');
+        return json(res,200,{ok:true,data:{service:'kuaimai-agent-connector',transport:'direct/1',endpoint:localEndpoint,instanceId}});
+      }
+      if(['/v1/connect/claim','/v1/connect/direct-resume','/v1/connect/direct-revoke'].includes(req.url)&&req.method==='POST'){
+        if(!desktopConnect?.direct||!origins.has(origin))fail(403,'原页面连接未授权');
+        const claim=req.url.endsWith('/claim'),revoke=req.url.endsWith('/direct-revoke');
+        rate(origin+':direct-connect',60);
+        const value=await body(req,claim?['state','verifier','instanceId']:['reconnectToken','instanceId']);
+        if(value.instanceId!==instanceId)fail(409,'连接器实例已变化，请重新复制连接请求');
+        let grant;
+        try{
+          if(revoke){releaseDirectClient(desktopConnect.direct.revoke({...value,origin}));return json(res,200,{ok:true,data:null});}
+          grant=desktopConnect.direct[claim?'claim':'resume']({...value,origin});
+        }catch{fail(403,'本页接入授权无效或已过期，请重新复制连接请求');}
+        if(!grant)return json(res,202,{ok:true,data:{pending:true}});
+        releaseDirectClient(grant.previousClient);
+        const {token,client}=makeClient(origin);client.websiteOrigin=origin;
+        client.expires=Math.min(client.expires,grant.expiresAt);
+        desktopConnect.direct.attach(claim?grant.reconnectToken:value.reconnectToken,token);
+        return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client),...(claim?{reconnectToken:grant.reconnectToken}:{})}});
+      }
       if(req.url==='/v1/health'&&req.method==='GET'){await checkHealth();return json(res,200,{ok:true,data:publicHealth(origin)});}
       if(req.url==='/v1/connect/exchange'&&req.method==='POST'){
         if(!desktopConnect)fail(404,'桌面连接入口未启用');
@@ -352,6 +375,6 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   });
   server.requestTimeout=10000;server.headersTimeout=10000;
   const leaseTimer=setInterval(()=>{revokeExpired();workBuddy?.sweep();},10000);leaseTimer.unref();
-  async function close(){if(closed)return;closed=true;desktopConnect?.clear();follow.close();clearInterval(leaseTimer);await codexDesktop?.close();for(const client of clients.values()){client.abort?.abort();clearTimeout(client.timer);if(client.run?.sessionId&&BUSY.has(client.run?.status))void adapter.interrupt?.(client.run?.sessionId).catch(()=>{});client.active=false;}const active=[...hubs.values()].map(retireHub);hubs.clear();await Promise.all([...active,...cleanups]);workBuddy?.close();await adapter.close?.();for(const res of streams)res.end();if(server.listening){const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}}
+  async function close(){if(closed)return;closed=true;desktopConnect?.clear();desktopConnect?.direct?.clear();follow.close();clearInterval(leaseTimer);await codexDesktop?.close();for(const client of clients.values()){client.abort?.abort();clearTimeout(client.timer);if(client.run?.sessionId&&BUSY.has(client.run?.status))void adapter.interrupt?.(client.run?.sessionId).catch(()=>{});client.active=false;}const active=[...hubs.values()].map(retireHub);hubs.clear();await Promise.all([...active,...cleanups]);workBuddy?.close();await adapter.close?.();for(const res of streams)res.end();if(server.listening){const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}}
   return {server,close,instanceId};
 }

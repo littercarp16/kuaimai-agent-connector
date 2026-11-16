@@ -7,18 +7,19 @@ import { createProductAdapters } from '../adapters/product-adapters.mjs';
 import { createCodexAdapter } from '../adapters/codex/codex.mjs';
 import { createCodexDesktopManager } from '../runtime/codex-desktop.mjs';
 import { createCodexDockManager } from '../runtime/codex-desktop-dock.mjs';
-import { claimService, listenAvailable } from '../runtime/service-instance.mjs';
+import { claimService, listenAvailable, listenDiscoverable } from '../runtime/service-instance.mjs';
 import { validWebOrigin } from '../runtime/web-origin.mjs';
 import { createConnectGrants, parseConnectURL } from './connect-grants.mjs';
 import { createConnectionWindow } from './public-window.mjs';
+import { createDirectGrants } from './direct-grants.mjs';
 
 export function createDesktopHost({ directory, preferredPort = 17653, onChange = () => {}, now = Date.now,
-  reconnect = false,
+  reconnect = false, direct = false,
   adapterFactory = options => createProductAdapters(options, { codex: createCodexAdapter }),
   desktopFactory = () => createCodexDesktopManager({ dock: createCodexDockManager() }),
   codexEnabled = process.env.KM_AGENT_DISABLE_CODEX !== '1',
 } = {}) {
-  let connector, release, endpoint, origins = [], pairCode, grants, bindings = [], writes = Promise.resolve();
+  let connector, release, endpoint, origins = [], pairCode, grants, directGrants, bindings = [], writes = Promise.resolve();
   const runtimePath = join(directory, 'connector.json'), pending = new Map();
   const status = () => ({ state: connector ? 'running' : 'stopped', endpoint: endpoint || null,
     instanceId: connector?.instanceId || null, sessionScope: 'agent', sessionLimit: 10, origins, pairCode: pairCode || null });
@@ -31,7 +32,7 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
     }); return writes;
   }
   async function stop() {
-    const old = connector; connector = null; pending.clear(); grants?.clear();
+    const old = connector; connector = null; pending.clear(); grants?.clear(); directGrants?.clear();
     try { await old?.close(); await writes.catch(() => {});
       if (old) try { if (JSON.parse(await readFile(runtimePath, 'utf8')).instanceId === old.instanceId) await unlink(runtimePath); } catch {}
     } finally { await release?.(); release = null; endpoint = null; pairCode = null; publish(); }
@@ -46,6 +47,7 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
     release = await claimService(runtimePath, createHash('sha256').update(JSON.stringify({ sessionScope: 'agent', origins, desktop: true })).digest('hex'));
     const key = randomBytes(32).toString('base64url'); pairCode = String(randomInt(100000, 1000000));
     grants = createConnectGrants({ now, reconnect });
+    directGrants = direct ? createDirectGrants({ now }) : null;
     try {
       const adapter = adapterFactory({ adapter: 'generic', codexSessionScope: 'agent', codexEnabled, qwenEnabled: false });
       const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -57,9 +59,9 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
         codexDesktop: codexEnabled && process.platform === 'darwin' ? desktopFactory() : null,
         enableWorkBuddy: true, enableMultiAgentFollow: true,
         workBuddyOptions: { workspaceId: 'ws_' + createHash('sha256').update(directory).digest('hex') },
-        desktopConnect: createConnectionWindow(grants),
+        desktopConnect: { ...createConnectionWindow(grants), direct: directGrants },
       });
-      const port = await listenAvailable(connector.server, preferredPort); endpoint = `http://127.0.0.1:${port}`;
+      const port = await (direct ? listenDiscoverable : listenAvailable)(connector.server, preferredPort); endpoint = `http://127.0.0.1:${port}`;
       await persist(key, connector.instanceId); publish(); return status();
     } catch (error) { await stop(); throw error; }
   }
@@ -74,7 +76,8 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
   function authorize(id) {
     const entry = pending.get(id); pending.delete(id);
     if (!connector || !entry || entry.expires <= now()) throw Error('网页接入请求已过期，请回到网页重新点击接入');
-    return grants.issue(entry.request, { endpoint, instanceId: connector.instanceId });
+    if (entry.request.transport === 'direct' && !directGrants) throw Error('请更新连接器以支持原页面直连');
+    return (entry.request.transport === 'direct' ? directGrants : grants).issue(entry.request, { endpoint, instanceId: connector.instanceId });
   }
   return { start, stop, status, inspectLink, authorize, deny(id) { pending.delete(id); } };
 }

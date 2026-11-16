@@ -13,7 +13,7 @@ import { parseConnectURL } from '../desktop/connect-grants.mjs';
 import { validWebOrigin } from '../runtime/web-origin.mjs';
 import { claimService } from '../runtime/service-instance.mjs';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.3.1';
 export const dataRoot = () => join(homedir(), '.kuaimai-agent', 'code');
 export function instanceDirectory(origin, root = dataRoot()) {
   if (!validWebOrigin(origin)) throw Error('无效的网页来源');
@@ -54,7 +54,7 @@ export async function runService({ origin, directory, port = 17653 }) {
   await privateDirectory(directory);
   const socketPath = join(directory, 'control.sock');
   if (Buffer.byteLength(socketPath) > 100) throw Error('后台运行目录路径过长');
-  const host = createDesktopHost({ directory, preferredPort: port, reconnect: true,
+  const host = createDesktopHost({ directory, preferredPort: port, reconnect: true, direct: true,
     // Code mode never installs either the bridge or Codex login task.
     desktopFactory: () => createCodexDesktopManager(),
   });
@@ -94,15 +94,23 @@ export async function runService({ origin, directory, port = 17653 }) {
 export async function ensureService({ origin, directory = instanceDirectory(origin), port = 17653 }) {
   directory = await privateDirectory(directory);
   const check = async () => {
-    try { const status = await control(directory, { action: 'status' }); if (status.origin !== origin || status.version !== VERSION) throw Error('已有连接器版本或来源不匹配，请先停止旧实例'); return status; }
+    try { const status = await control(directory, { action: 'status' }); if (status.origin !== origin) throw Error('已有连接器来源不匹配'); return status; }
     catch (error) { if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) return null; throw error; }
   };
-  const existing = await check(); if (existing) return { ...existing, reused: true };
+  const existing = await check(); if (existing?.version === VERSION) return { ...existing, reused: true };
   let release;
   try { release = await claimService(join(directory, 'startup'), origin); }
-  catch { for (let i = 0; i < 100; i++) { await delay(100); const ready = await check(); if (ready) return { ...ready, reused: true }; } throw Error('后台启动未获确认，请检查服务日志'); }
+  catch { for (let i = 0; i < 100; i++) { await delay(100); const ready = await check(); if (ready?.version === VERSION) return { ...ready, reused: true }; } throw Error('后台启动未获确认，请检查服务日志'); }
   try {
-    const raced = await check(); if (raced) return { ...raced, reused: true };
+    const raced = await check(); if (raced?.version === VERSION) return { ...raced, reused: true };
+    if (raced) {
+      // This is the owned per-origin control socket, never an arbitrary TCP
+      // process or the native Agent. Upgrade only older known release versions.
+      if (!/^\d+\.\d+\.\d+$/.test(raced.version || '') || raced.version.localeCompare(VERSION, undefined, { numeric: true }) >= 0) throw Error('已有连接器版本更新，请使用匹配的 npm 版本');
+      await control(directory, { action: 'stop' });
+      for (let i = 0; i < 100 && await check(); i++) await delay(100);
+      if (await check()) throw Error('旧连接器尚未退出，请稍后重试');
+    }
     const log = await open(join(directory, 'service.log'), 'a', 0o600);
     const entry = fileURLToPath(new URL('../../headless.mjs', import.meta.url));
     const child = spawn(process.execPath, [entry, 'serve', '--origin', origin, '--directory', directory, '--port', String(port)], { detached: true, stdio: ['ignore', log.fd, log.fd], cwd: await realpath(fileURLToPath(new URL('../../', import.meta.url))) });

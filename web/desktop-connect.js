@@ -27,15 +27,15 @@
   function validDescriptor(value,state){
     try{const u=new URL(value.endpoint);return value.state===state&&u.origin===value.endpoint&&u.protocol==='http:'&&u.hostname==='127.0.0.1'&&Number(u.port)>=1024&&!u.username&&!u.password&&/^[\w:.-]{1,140}$/.test(value.instanceId)&&/^[\w-]{43}$/.test(value.ticket);}catch{return false;}
   }
-  function connect({onStatus=()=>{},timeoutMs=120000,launch,resume,signal,beforeOpen}={}) {
+  function connect({onStatus=()=>{},timeoutMs=120000,launch,resume,signal,beforeOpen,existingWindow}={}) {
     if(!['http:','https:'].includes(location.protocol)||!crypto?.getRandomValues)return Promise.reject(Error('请从受支持的网页打开本机连接器'));
     const origin=location.origin,state=random(),verifier=random(),challenge=sha256(verifier),key='km-agent.pending.'+state;
     const url='km-agent://connect?'+new URLSearchParams({origin,callback:origin+'/agent/connect-callback.html',state,challenge,browser:browserName()});
-    beforeOpen?.(url);
-    const popup=window.open('about:blank','km-agent-'+state,'popup,width=480,height=500');
+    if(!existingWindow)beforeOpen?.(url);
+    const popup=existingWindow||window.open('about:blank','km-agent-'+state,'popup,width=480,height=500');
     if(!popup)return Promise.reject(Error('请允许此网站打开连接窗口，然后重新点击接入'));
-    popup.document.title='正在打开快麦连接器';popup.document.body.textContent='正在打开本机连接器，请在 macOS 确认网页来源。';
-    let descriptor=null,settled=false,closed=false,channel,deadline,watch,sequence=0;
+    if(!existingWindow){popup.document.title='正在打开快麦连接器';popup.document.body.textContent='正在打开本机连接器，请在 macOS 确认网页来源。';}
+    let descriptor=null,settled=false,closed=false,channel,deadline,watch,sequence=0,closeReply,closeResult;
     const requests=new Map();
     const send=value=>{if(descriptor&&!popup.closed)popup.postMessage({scope:'km-agent/website',state,...value},descriptor.endpoint);};
     const erase=()=>{try{localStorage.removeItem(key);localStorage.removeItem(key+'.result');}catch{}};
@@ -47,22 +47,31 @@
       if(!settled){settled=true;rejectConnect(Error(message));}onStatus(message);
       signal?.removeEventListener('abort',abort);
     }
-    function abort(){cleanup('连接准备已取消');popup.close();}
+    function abandon(message){if(existingWindow)send({type:'detach'});cleanup(message);if(!existingWindow)popup.close();}
+    function abort(){abandon('连接准备已取消');}
     function receive(value){
       if(closed||descriptor||!validDescriptor(value,state))return;
       descriptor=value;erase();channel?.close();onStatus('正在连接本机服务…');
       popup.location.href=descriptor.endpoint+'/connect#'+new URLSearchParams({state,origin,instanceId:descriptor.instanceId});
     }
     function onStorage(event){if(event.key===key+'.result'&&event.newValue)try{receive(JSON.parse(event.newValue));}catch{}}
-    function onPageHide(){send({type:'close'});cleanup('网页已关闭');try{popup.close();}catch{}}
+    function detach(){send({type:'detach'});cleanup('网页连接已暂停');}
+    function onPageHide(){if(settled)detach();else abort();}
+    function close(){
+      if(closeResult)return closeResult;
+      if(closed){popup.close();return Promise.resolve();}
+      closeResult=new Promise(resolve=>{const timer=setTimeout(()=>closeReply?.(),2000);closeReply=()=>{clearTimeout(timer);closeReply=null;cleanup('已断开本机连接');popup.close();resolve();};send({type:'close'});});
+      return closeResult;
+    }
     function onMessage(event){
       if(closed||!descriptor||event.source!==popup||event.origin!==descriptor.endpoint||event.data?.scope!=='km-agent/window'||event.data.state!==state)return;
       const message=event.data;
       if(message.type==='ready'){send({type:'init',ticket:descriptor.ticket,verifier,resume:Boolean(resume)});return;}
       if(message.type==='connected'&&!settled&&message.instanceId===descriptor.instanceId){
-        settled=true;clearTimeout(deadline);onStatus('本机连接器已接入');
-        resolveConnect({endpoint:descriptor.endpoint,instanceId:descriptor.instanceId,token:'desktop-relay-'+state,fetch:relayFetch,close(){send({type:'close'});cleanup('已断开本机连接');popup.close();}});return;
+        settled=true;clearTimeout(deadline);signal?.removeEventListener('abort',abort);onStatus('本机连接器已接入');
+        resolveConnect({endpoint:descriptor.endpoint,instanceId:descriptor.instanceId,relayId:message.resumable===true?message.relayId:undefined,token:'desktop-relay-'+state,fetch:relayFetch,detach,close});return;
       }
+      if(message.type==='closed'&&closeReply){closeReply();return;}
       if(message.type==='failure'||message.type==='closed'){cleanup(message.message||'本机连接窗口已关闭，请重新接入');return;}
       const pending=requests.get(message.id);if(!pending)return;
       if(message.type==='headers'&&!pending.controller){
@@ -90,17 +99,38 @@
       if(signal?.aborted){abort();return result;}signal?.addEventListener('abort',abort,{once:true});
       localStorage.setItem(key,JSON.stringify({created:Date.now(),ttl:Math.min(timeoutMs,1800000)}));
       channel=new BroadcastChannel('km-agent-connect-'+state);channel.onmessage=event=>receive(event.data);
-      deadline=setTimeout(()=>{cleanup('连接超时。请确认已安装连接器，并在同一浏览器配置中重新接入。');popup.close();},timeoutMs);
+      deadline=setTimeout(()=>abandon('连接超时。请确认连接器仍在运行，并在同一浏览器配置中重新接入。'),timeoutMs);
       watch=setInterval(()=>{if(popup.closed)cleanup('本机连接窗口已关闭，请重新接入');},500);
       if(resume){
         if(!validDescriptor({...resume,state,ticket:random()},state))throw Error('后台连接地址无效');
         descriptor={...resume,state};erase();channel.close();onStatus('正在连接后台服务…');
-        popup.location.href=descriptor.endpoint+'/connect#'+new URLSearchParams({state,origin,instanceId:descriptor.instanceId});return result;
+        if(existingWindow)send({type:'reattach',relayId:resume.relayId});
+        else popup.location.href=descriptor.endpoint+'/connect#'+new URLSearchParams({state,origin,instanceId:descriptor.instanceId});return result;
       }
       onStatus('请在本机连接器中确认此次接入');
       if(launch)Promise.resolve(launch(url)).catch(()=>{cleanup('无法唤起本机连接器');popup.close();});else popup.location.href=url;
-    }catch{cleanup('网页存储不可用，无法建立安全连接');popup.close();}
+    }catch{abandon('网页存储不可用，无法建立安全连接');}
     return result;
   }
-  globalThis.KmDesktopConnector=Object.freeze({connect,challengeFor:sha256,randomUUID});
+  // The already-authorized relay retains its opener across a page reload. Only
+  // that window, from the remembered loopback origin, can complete this handshake.
+  // No popup, URL scheme, port probe or cross-origin network request is made here.
+  function restore({resume,onStatus=()=>{},signal,timeoutMs=4000}={}) {
+    if(!resume||!/^[\w-]{43}$/.test(resume.relayId||'')||!validDescriptor({...resume,state:'saved',ticket:random()},'saved'))return Promise.reject(Error('请先连接本地 Agent'));
+    return new Promise((resolve,reject)=>{
+      let timer;
+      const cleanup=()=>{clearTimeout(timer);removeEventListener('message',offer);signal?.removeEventListener('abort',abort);};
+      const abort=()=>{cleanup();reject(Error('自动恢复已取消'));};
+      const offer=event=>{
+        const data=event.data;
+        if(event.origin!==resume.endpoint||!event.source||data?.scope!=='km-agent/available'||data.relayId!==resume.relayId||data.instanceId!==resume.instanceId)return;
+        cleanup();resolve(connect({resume,existingWindow:event.source,onStatus,signal,timeoutMs:10000}));
+      };
+      if(signal?.aborted){abort();return;}
+      addEventListener('message',offer);signal?.addEventListener('abort',abort,{once:true});
+      timer=setTimeout(()=>{cleanup();reject(Error('未找到已授权的连接窗口，请重新选择 Agent 连接'));},timeoutMs);
+      onStatus('正在恢复已授权的本地连接…');
+    });
+  }
+  globalThis.KmDesktopConnector=Object.freeze({connect,restore,challengeFor:sha256,randomUUID});
 })();

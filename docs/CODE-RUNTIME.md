@@ -1,35 +1,40 @@
-# npm 后台运行版（0.3.0）
+# npm 后台运行版（0.3.1）
 
-当前支持 macOS 与 Node.js 22+。网页复制的请求让本地 Agent 从 npm 官方源安装并启动 `kuaimai-agent-connector`，不需要 `.app`、登录自启动、项目目录、手动端口或配对码。
+当前支持 macOS 与 Node.js 22+。网页复制请求，让本地 Agent 从 npm 官方源安装并后台启动。不需要 `.app`、登录启动项、项目目录、手动端口或配对码。
 
-## 运行流程
+## 原页面连接流程
 
-1. 点击复制：先复制完整指令，再打开等待连接的窗口。指令含固定 npm 版本与 30 分钟有效的接入参数。
-2. Agent 执行 `npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.0 connect --request '…'`。缺少 Node 时由 Agent 从官方来源准备环境。
-3. CLI 将固定版本安装到 `~/.kuaimai-agent/code/npm/0.3.0/`，跳过 npm 安装脚本；已安装直接复用，后台服务不依赖 npx 缓存。
-4. 启动独立 Node 进程，相同来源和版本复用；17653 占用时自动分配空闲端口。
-5. CLI 通过当前用户私有 Unix socket 签发短期 PKCE 票据，用浏览器打开原网站固定回调页。网页自动获得实际端口并读取最近 10 条主会话与项目名。
-6. 用户选择会话后进入协作。安装回调不调用桌面重启接口，避免中断执行安装的 Codex。若仍使用私有 stdio，待 Agent 完成后由用户选择/刷新触发现有切换；本版本不注册 Codex Dock 登录任务。
+1. 网页生成 state 和 PKCE verifier，只把 challenge 与精确网站来源放进复制请求。verifier 留在当前标签页。
+2. Agent 执行 `npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.1 connect --request '…'`。
+3. CLI 安装固定版本到 `~/.kuaimai-agent/code/npm/0.3.1/`，忽略安装脚本。服务从持久目录独立运行，不依赖 npx 缓存。
+4. 同来源、同版本复用；升级时只停止经私有控制 socket 验证的旧连接器，不终止端口占用者或 Codex。
+5. 服务优先监听 17653，被占用则在 17653–17684 中选择可用端口；全部占用时明确报错。网页只向该范围和曾经保存的 loopback 端点请求无凭据的发现接口，不扫描任意端口。
+6. Agent 通过私有 IPC 登记短期 challenge。不会运行 `open`、打开 URL Scheme 或浏览器回调。原页面发现服务后用 verifier 单次领取当前实例的授权。
+7. 网页直接通过 HTTP/SSE 加载最近 10 条会话、项目名和双向消息，不使用 popup、iframe 或中转窗口。
+8. 选择并确认会话后才允许输入。安装准备不会重启 Codex；需要切换共享 socket 时仍由后续显式选择/检测触发。不会安装登录任务。
 
-不注册 `km-agent://`，不新建登录项，不修改旧桌面版的既有设置。服务停止时网页无法执行本机命令，会提示再次复制请求。浏览器中转窗口需要保留。
+## 授权与恢复
 
-## 发现与授权
+监听仅限 127.0.0.1；精确验证 Host、Origin 和 CORS，不接受任意网站。领取、恢复和撤销授权都绑定网站与实例。网页不接触本机 publisher key，也不能通过直连接口调用本机管理接口。
 
-每个网站对应独立用户进程，目录为 `~/.kuaimai-agent/code/instances/<origin-hash>/`，权限 0700；控制 socket 与运行清单为 0600。网页不能调用私有安装/停止操作，不会收到发布密钥。
+访问 token 仅在内存。8 小时有效的恢复凭据仅放当前标签页的 sessionStorage；localStorage 只放 endpoint 和 instanceId。复制请求和 CLI 输出均不含这些凭据。刷新会用恢复凭据替换旧网页客户端，不继承会话绑定、控制权限或重发 prompt。
 
-网页只缓存 endpoint 和实例标识。重连凭据留在本机端口的浏览器存储中，绑定网站与实例，8 小时失效；刷新后可重连，但不会自动绑定会话或继承输入控制。服务重启后旧凭据失效，由新请求回传新端口。无端口扫描或云端凭据同步。
+关闭业务网页会释放本页客户端，后台服务继续运行。主动断开会撤销恢复授权并清理缓存。浏览器新标签页、授权过期或服务重启后需要新的复制请求，网页仍自动识别端口，无须填写配置。
 
-正式网站使用 HTTPS；明确的 HTTP 开发域名也受支持。JSON/SSE 经本机顶层连接窗口中转，网页不直接跨站请求 loopback。首次可能需允许弹窗；回调必须使用原浏览器配置文件，隐私窗口或其他配置无法共享此次接入。
+旧版 macOS 应用的顶层连接窗口和授权接口继续兼容；新的代码版 SDK 不调用这条路径。
 
-## 发布与验证
+## 浏览器和部署
 
-```sh
-npm test
-npm pack --dry-run
-npm publish --registry=https://registry.npmjs.org --access public
-node desktop/sync-code.mjs /absolute/path/to/lingtong-app-view
-```
+正式与灰度网页使用 HTTPS。浏览器首次可能提示允许访问本地网络，这是浏览器权限，不会打开我们的连接页面。测试已通过正常 Chrome 网络权限完成，未关闭同源、混合内容或本地网络保护。
 
-前端发布 SDK、npm 版本配置和 `/agent/connect-callback.html`、`/agent/connect-callback.js`。回调不能重定向到 SPA 首页或加入 URL 采集、第三方统计。不再托管运行压缩包和自有下载器。
+指向 127.0.0.1 的 `http://local.lt.com:8251` 已验证可直连。当前 `http://lt.com:8085` 指向局域网地址，现代浏览器不允许它从非安全上下文升级访问 loopback；该测试站点应启用 HTTPS。不要通过关闭浏览器安全功能解决。
 
-先发布 npm，再发布引用它的前端。版本更新同时修改 package.json、锁文件和 src/headless/service.mjs。测试覆盖后台启动/关闭、端口冲突、复用、来源隔离、过期票据和重连。前端 tests/browser/kmPageCodex.cjs 使用真实 Vue、复制操作、SDK、HTTP/SSE；本地 Agent 的请求执行与模型响应使用合成夹具。
+若网站设置 CSP，`connect-src` 需包含 `http://127.0.0.1:*`。若业务网页嵌在跨站 iframe 中，上层还需按浏览器规则委派本地网络权限。参考 [Chrome Local Network Access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access)。
+
+前端同步：`node desktop/sync-code.mjs /absolute/path/to/lingtong-app-view`。同步 npm 版本和 SDK；历史回调静态文件保留兼容。先发布 npm，再发布引用新版本的网页。
+
+## 验证
+
+`tests/desktop/direct.test.mjs` 验证来源/实例/PKCE、错误 Host、单次领取、过期、恢复回收和主动撤销。
+
+`tests/desktop/direct-browser.test.mjs` 使用正式/灰度来源的浏览器夹具和真实本机 HTTP/SSE，验证单页面、消息收发、刷新与断开。`lingtong-app-view/tests/browser/kmPageCodex.cjs` 使用实际 Vue 组件、复制操作和本机网络，验证最近 10 条、项目标签、显式绑定、消息和刷新；其中 Agent 执行与模型响应是夹具，真实 Codex 另作人工链路验收。

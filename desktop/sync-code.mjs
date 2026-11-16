@@ -9,7 +9,7 @@ const vendor=join(front,'src/views/kmMDTable/agent/vendor'),assets=join(front,'p
 await mkdir(assets,{recursive:true});
 for(const name of ['desktop-connect.js','code-connect.js']){
  let source=(await readFile(join(root,'web',name),'utf8')).replace('(() => {\n','');
- source=name==='desktop-connect.js'?source.replace('globalThis.KmDesktopConnector=Object.freeze({connect,challengeFor:sha256,randomUUID});\n})();','export default Object.freeze({connect,challengeFor:sha256,randomUUID});'):
+ source=name==='desktop-connect.js'?source.replace('globalThis.KmDesktopConnector=Object.freeze({connect,restore,challengeFor:sha256,randomUUID});\n})();','export default Object.freeze({connect,restore,challengeFor:sha256,randomUUID});'):
  "import DesktopConnector from './desktop-connect'\n"+source.replaceAll('globalThis.KmDesktopConnector','DesktopConnector').replace('globalThis.KmCodeConnector = Object.freeze({ create });\n})();','export default Object.freeze({ create });');
  await writeFile(join(vendor,name),source);
 }

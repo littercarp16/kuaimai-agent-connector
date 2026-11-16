@@ -70,3 +70,20 @@ export async function listenAvailable(server, preferredPort) {
   try { return await listen(preferredPort); }
   catch (error) { if (error.code !== 'EADDRINUSE') throw error; return listen(0); }
 }
+
+// Code-mode discovery has a small documented range. Do not scan arbitrary ports
+// or terminate their owners; fail explicitly when this whole range is occupied.
+export const DIRECT_PORTS = Object.freeze(Array.from({ length: 32 }, (_, i) => 17653 + i));
+export async function listenDiscoverable(server, preferredPort = DIRECT_PORTS[0]) {
+  const ports = [...new Set([...(DIRECT_PORTS.includes(preferredPort) ? [preferredPort] : []), ...DIRECT_PORTS])];
+  for (const port of ports) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const error = cause => { server.off('listening', ready); reject(cause); };
+        const ready = () => { server.off('error', error); resolve(server.address().port); };
+        server.once('error', error); server.once('listening', ready); server.listen(port, '127.0.0.1');
+      });
+    } catch (error) { if (error.code !== 'EADDRINUSE') throw error; }
+  }
+  throw Error('连接器预留端口 17653–17684 均被占用，请释放其中一个端口后重试');
+}
