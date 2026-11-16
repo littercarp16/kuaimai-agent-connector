@@ -139,7 +139,15 @@
         for (const descriptor of candidates) {
           // A failed mutating response is never blindly resent. Ask for a fresh
           // request if acknowledgement was lost instead of creating duplicate clients.
-          const data = await request(descriptor.endpoint, '/v1/connect/claim', { state:value.state, verifier:value.verifier, instanceId:descriptor.instanceId }, signal);
+          let data;
+          try { data = await request(descriptor.endpoint, '/v1/connect/claim', { state:value.state, verifier:value.verifier, instanceId:descriptor.instanceId }, signal); }
+          catch (error) {
+            // The Agent can replace an older service after discovery. A 409
+            // is rejected before consuming the grant; rediscover its identity.
+            // Lost/ambiguous responses still fail instead of replaying a claim.
+            if (error.status !== 409) throw error;
+            candidates = []; nextDiscovery = 0; break;
+          }
           if (!data.pending) return accept(descriptor, data);
         }
         await delay(1500, signal);

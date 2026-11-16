@@ -27,10 +27,19 @@ for(const origin of ['https://app.ltpass.com','https://app1.ltpass.com'])test('H
   </script>`;
   await route.fulfill({contentType:path.endsWith('.js')?'text/javascript':'text/html',headers:{'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:*"},body});
  });
+ let staleClaim=false;
+ await context.route(started.endpoint+'/v1/connect/claim',route=>{
+  if(!staleClaim&&route.request().method()==='POST'){
+   staleClaim=true;
+   return route.fulfill({status:409,headers:{'Access-Control-Allow-Origin':origin,'Content-Type':'application/json'},body:JSON.stringify({ok:false,error:{message:'连接器实例已变化，请重新复制连接请求'}})});
+  }
+  return route.continue();
+ });
  await page.goto(origin+'/');await page.click('#prepare');
  const copied=JSON.parse(Buffer.from(await page.evaluate(()=>copied),'base64url'));
  assert.equal(host.authorize(host.inspectLink(copied.url).id).transport,'direct');
  await page.waitForFunction(()=>document.querySelector('#status').textContent==='connected');
+ assert.equal(staleClaim,true,'升级后的明确实例拒绝会重新发现，原请求继续接入');
  assert.equal(context.pages().length,1);assert.equal(await page.evaluate(()=>session.endpoint),started.endpoint);
  assert.equal(await page.evaluate(()=>document.querySelectorAll('iframe').length),0);
  await page.evaluate(async()=>{await session.fetch(session.endpoint+'/v1/bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'ses_direct_test',allowControl:true})});const result=await session.fetch(session.endpoint+'/v1/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'ses_direct_test',requestId:crypto.randomUUID(),text:'direct browser probe'})});if(result.status!==202)throw Error('send failed');});
