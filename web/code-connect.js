@@ -10,9 +10,67 @@
   const validEndpoint = value => { try { const u = new URL(value); return u.origin === value && u.protocol === 'http:' && u.hostname === '127.0.0.1' && Number(u.port) >= 1024 && !u.username && !u.password; } catch { return false; } };
   const validGrant = value => value && validEndpoint(value.endpoint) && typeof value.instanceId === 'string' && code.test(value.reconnectToken || '') && value.expiresAt > Date.now();
   const validPending = value => value && code.test(value.state || '') && code.test(value.verifier || '') && Date.now() - value.created < 1800000;
-  const unavailable = () => Error('未能连接本机服务。请确认 Agent 已执行最新连接请求；若浏览器提示访问本地网络，请允许。远程 HTTP 页面请使用 HTTPS。');
+  const needsExtension = ['http://lt.com:8085', 'http://local.lt.com:8251'].includes(location.origin);
+  const extensionHint = '此 HTTP 页面需要“快麦本地 Agent 连接”扩展。请让 Agent 执行最新连接请求，安装扩展后刷新本页。';
+  let extensionConnection;
+  function extensionTransport() {
+    if (extensionConnection) return extensionConnection;
+    extensionConnection = new Promise((resolve, reject) => {
+      const channel = new MessageChannel(), requests = new Map(); let ready = false, sequence = 0;
+      const send = value => channel.port1.postMessage(value);
+      const fail = message => {
+        clearTimeout(timer); extensionConnection = null; channel.port1.close();
+        for (const item of requests.values()) item.fail(Error(message));
+        requests.clear(); if (!ready) reject(Error(message));
+      };
+      const timer = setTimeout(() => fail(extensionHint), 800);
+      channel.port1.onmessage = event => {
+        const value = event.data;
+        if (value.type === 'unavailable') { fail(value.error); return; }
+        if (value.type === 'ready') {
+          clearTimeout(timer); ready = true;
+          resolve((url, init = {}) => new Promise((accept, decline) => {
+            if (init.signal?.aborted) { decline(init.signal.reason); return; }
+            const id = 'r' + (++sequence), headers = Object.fromEntries(new Headers(init.headers));
+            let stream, acknowledged = true;
+            const cleanup = () => { requests.delete(id); init.signal?.removeEventListener('abort', abort); };
+            const abort = () => { send({ type: 'cancel', id }); item.fail(init.signal.reason || Error('请求已取消')); };
+            const ack = () => { if (!acknowledged) { acknowledged = true; send({ type: 'ack', id }); } };
+            const item = {
+              fail(error) { cleanup(); if (stream) stream.error(error); else decline(error); },
+              message(message) {
+                if (message.type === 'error') { item.fail(Error(message.error)); return; }
+                if (message.type === 'response') {
+                  const body = new ReadableStream({
+                    start(controller) { stream = controller; }, pull() { ack(); },
+                    cancel() { send({ type: 'cancel', id }); cleanup(); },
+                  }, { highWaterMark: 2 });
+                  accept(new Response(body, { status: message.status, headers: message.headers }));
+                } else if (message.type === 'chunk') {
+                  acknowledged = false;
+                  stream.enqueue(Uint8Array.from(atob(message.data), char => char.charCodeAt(0)));
+                  if (stream.desiredSize > 0) ack();
+                } else if (message.type === 'end') { cleanup(); stream.close(); }
+              },
+            };
+            requests.set(id, item); init.signal?.addEventListener('abort', abort, { once: true });
+            send({ type: 'request', id, url: String(url), method: (init.method || 'GET').toUpperCase(), headers, ...(init.body === undefined ? {} : { body: init.body }) });
+          }));
+          return;
+        }
+        requests.get(value.id)?.message(value);
+      };
+      channel.port1.start();
+      window.postMessage({ type: 'km-agent-extension/1' }, location.origin, [channel.port2]);
+    });
+    return extensionConnection;
+  }
+  async function localFetch(url, init) {
+    return needsExtension ? (await extensionTransport())(url, init) : fetch(url, init);
+  }
+  const unavailable = () => Error(needsExtension ? extensionHint : '未能连接本机服务。请确认 Agent 已执行最新连接请求；若浏览器提示访问本地网络，请允许。');
   async function request(endpoint, path, body, signal, timeout = 10000) {
-    const response = await fetch(endpoint + path, { method: body === undefined ? 'GET' : 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error',
+    const response = await localFetch(endpoint + path, { method: body === undefined ? 'GET' : 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error',
       ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json', 'X-Km-Agent': '1' }, body: JSON.stringify(body) }),
       signal: AbortSignal.any([signal, AbortSignal.timeout(timeout)].filter(Boolean)) });
     const result = await response.json();
@@ -53,18 +111,18 @@
       const lifetime = new AbortController(); let closed = false;
       const end = () => {
         if (closed) return Promise.resolve(); closed = true; lifetime.abort(); removeEventListener('pagehide', detach);
-        return fetch(grant.endpoint + '/v1/disconnect', { method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error', keepalive: true,
+        return localFetch(grant.endpoint + '/v1/disconnect', { method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error', keepalive: true,
           headers: { 'Content-Type':'application/json','X-Km-Agent':'1',Authorization:'Bearer '+data.token }, body:'{}', signal:AbortSignal.timeout(2000) }).catch(() => {});
       };
       const detach = () => { void end(); };
       addEventListener('pagehide', detach);
-      session = { endpoint: grant.endpoint, instanceId: grant.instanceId, token: data.token,
+      session = { endpoint: grant.endpoint, instanceId: grant.instanceId, token: data.token, transport: needsExtension ? 'extension/1' : 'direct/1',
         get closed() { return closed; }, detach, close: end,
         fetch(value, init = {}) {
           const url = new URL(value), method = (init.method || 'GET').toUpperCase();
           if (closed || url.origin !== grant.endpoint || url.search || url.hash || !paths.has(url.pathname) || !['GET','POST'].includes(method)) return Promise.reject(Error('本页连接已关闭或请求路径不受支持'));
           const headers = new Headers(init.headers); headers.set('X-Km-Agent','1'); headers.set('Authorization','Bearer '+data.token);
-          return fetch(value, { ...init, method, headers, credentials:'omit', cache:'no-store', redirect:'error', signal:AbortSignal.any([lifetime.signal,init.signal].filter(Boolean)) });
+          return localFetch(value, { ...init, method, headers, credentials:'omit', cache:'no-store', redirect:'error', signal:AbortSignal.any([lifetime.signal,init.signal].filter(Boolean)) });
         },
       };
       onStatus('本机连接器已接入'); return session;
@@ -73,6 +131,10 @@
       onStatus('请将连接请求交给本地 Agent，安装启动后会在本页自动连接');
       const saved = read(localStorage, endpointKey); let candidates = [], nextDiscovery = 0;
       while (!signal.aborted && validPending(value)) {
+        if (needsExtension) {
+          try { await extensionTransport(); }
+          catch (error) { onStatus(error.message); await delay(2000, signal); continue; }
+        }
         if (Date.now() >= nextDiscovery) { candidates = await discover(signal, saved); nextDiscovery = Date.now() + 5000; }
         for (const descriptor of candidates) {
           // A failed mutating response is never blindly resent. Ask for a fresh

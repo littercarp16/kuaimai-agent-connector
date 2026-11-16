@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { runService, ensureService, instanceDirectory, connectService, control, openCallback } from './src/headless/service.mjs';
+import { installExtensionHost } from './src/extension/install.mjs';
+import { ORIGINS } from './src/extension/policy.mjs';
 try {
   if (process.platform !== 'darwin' || Number(process.versions.node.split('.')[0]) < 22) throw Error('代码版目前支持 macOS 和 Node.js 22+');
   const [action, ...args] = process.argv.slice(2), options = {};
@@ -10,7 +12,11 @@ try {
   if (action === 'serve') await runService(options);
   else {
     let result;
-    if (action === 'connect') { result = await connectService(options.request, options); if (result.transport !== 'direct') await openCallback(result); }
+    if (action === 'connect') {
+      result = await connectService(options.request, options);
+      if (result.transport === 'direct' && ORIGINS.includes(result.origin)) result.browserExtension = await installExtensionHost();
+      if (result.transport !== 'direct') await openCallback(result);
+    }
     else if (action === 'start') result = await ensureService(options);
     else if (['status','stop'].includes(action)) result = await control(options.directory, { action });
     else throw Error('用法：node headless.mjs connect --request <网页生成的请求>；status/stop --origin <网页来源>');

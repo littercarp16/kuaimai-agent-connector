@@ -7,7 +7,7 @@
 在绫通快麦多维表格网页选择 ChatGPT / Codex，点击“复制连接请求”，交给本地 Agent 执行：
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.1 connect --request '<网页自动生成的请求>'
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 connect --request '<网页自动生成的请求>'
 ```
 
 命令安装或复用当前用户目录中的固定版本，启动独立后台进程，并将实际端口返回原网页。无需选择项目目录、填写端口或配对码。在原页面直接连接，无需弹窗、回调页或保留连接窗口；接入请求有效期 30 分钟。
@@ -22,8 +22,8 @@ npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.1 co
 ## 服务管理
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.1 status --origin https://app.ltpass.com
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.1 stop --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 status --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 stop --origin https://app.ltpass.com
 ```
 
 以实际网页来源替换示例。代码保存在 `~/.kuaimai-agent/code/npm/`，运行信息与日志位于 `~/.kuaimai-agent/code/instances/`。运行文件包含本机凭据，不应上传或公开。
@@ -38,7 +38,9 @@ npm pack --dry-run
 
 `src/adapters/` 实现 Agent 适配，`src/http/` 实现 HTTP/SSE，`src/headless/` 实现后台运行，`web/` 提供原页面直连 SDK（旧 macOS 应用的连接窗口保留兼容），`tests/` 是回归测试。原有 CLI、技能和 macOS 应用分发方式保留。
 
-线上网页使用 HTTPS，并允许浏览器的本地网络访问权限；如设置 CSP，`connect-src` 需允许 `http://127.0.0.1:*`。指向 loopback 的 HTTP 本地开发域名已验证；位于局域网的 HTTP 测试站点需要 HTTPS。
+线上/灰度 HTTPS 网页直接连接本机，并按浏览器提示允许本地网络访问；如设置 CSP，`connect-src` 需允许 `http://127.0.0.1:*`。
+
+`http://lt.com:8085` 和 `http://local.lt.com:8251` 使用浏览器扩展通道，无需改 HTTPS，不打开连接窗口。Agent 执行 0.3.2+ 的连接请求时自动注册本机通道；首次需在 Chrome 中安装扩展并刷新原网页，之后直接复用。端口发现、最近会话和双向流式消息仍由本机连接器提供，不经过服务器中继。见 [扩展安装说明](browser-extension/README.md) 和 [通信说明](docs/BROWSER-EXTENSION.md)。
 
 前端发布前执行 `node desktop/sync-code.mjs /absolute/path/to/lingtong-app-view` 同步 npm 版本、SDK 和回调页；不需将运行包复制进网页静态目录。
 

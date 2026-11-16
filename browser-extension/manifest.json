@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "快麦本地 Agent 连接",
+  "description": "让绫通 HTTP 测试与开发页面在原页面连接本机 Agent，不经过服务器中继。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnuOZmYo+IQ+ihDC6RRsNC4x8de0PHVnbbmEjFuRBOQJ1v7GCqbctEyVBeRuL6FUqbALsxS2SaCX+V+WzZH182V5GqKTbKsNd7hhdQUl+tNBOQp7dQZeSs6p8OIvDJSB/kSyS7fHCiwPeCyWkMvW86ZZk/gAZRyD1Vgc/DIhBYWDlHTip4joUDvxO75N1okJOoYO9lIacUcNbBGr5/haB/C3yHt+15LSDLgOJvcxp7s2P2/62MybldK9QyZb4O35orzlrwq2Fm+GrSSEDhckHQAZDDUEwZKjLQfcxCff0j3QqEjJ3H/km6tzrVnmnk8zvLs+wclQ0nFjr+lpAkybN8QIDAQAB",
+  "permissions": ["nativeMessaging"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [{
+    "matches": ["http://lt.com/*", "http://local.lt.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_start",
+    "all_frames": false
+  }]
+}

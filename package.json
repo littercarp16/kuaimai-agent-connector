@@ -1,13 +1,13 @@
 {
   "name": "kuaimai-agent-connector",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Local Agent bridge for Kuaimai and Lingtong, with background Codex sessions and browser connections",
   "license": "UNLICENSED",
   "repository": { "type": "git", "url": "git+https://github.com/littercarp16/kuaimai-agent-connector.git" },
   "homepage": "https://github.com/littercarp16/kuaimai-agent-connector#readme",
   "bugs": { "url": "https://github.com/littercarp16/kuaimai-agent-connector/issues" },
   "bin": { "kuaimai-agent": "bin/kuaimai-agent.mjs" },
-  "files": ["bin/", "src/", "web/", "skills/km-agent-bridge/", "workspace/README.md", "*.mjs"],
+  "files": ["bin/", "src/", "web/", "browser-extension/", "skills/km-agent-bridge/", "workspace/README.md", "*.mjs"],
   "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
   "os": ["darwin"],
   "type": "module",
@@ -16,6 +16,7 @@
     "codex:desktop": "node codex-desktop.mjs",
     "test": "node --test \"tests/**/*.test.mjs\"",
     "build:macos": "node desktop/build-macos.mjs",
+    "build:extension": "node desktop/build-extension.mjs",
     "test:desktop": "node --test tests/desktop/*.test.mjs"
   },
   "dependencies": {

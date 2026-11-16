@@ -13,7 +13,7 @@ import { parseConnectURL } from '../desktop/connect-grants.mjs';
 import { validWebOrigin } from '../runtime/web-origin.mjs';
 import { claimService } from '../runtime/service-instance.mjs';
 
-export const VERSION = '0.3.1';
+export const VERSION = '0.3.2';
 export const dataRoot = () => join(homedir(), '.kuaimai-agent', 'code');
 export function instanceDirectory(origin, root = dataRoot()) {
   if (!validWebOrigin(origin)) throw Error('无效的网页来源');

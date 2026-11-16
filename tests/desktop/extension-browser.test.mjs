@@ -1,0 +1,60 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { installExtensionHost } from '../../src/extension/install.mjs';
+import { EXTENSION_ID } from '../../src/extension/policy.mjs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createDesktopHost } from '../../src/desktop/host.mjs';
+const modulePath=process.env.PWB_PLAYWRIGHT_MODULE;
+const chromium=modulePath?(await import(modulePath)).chromium:null;
+const assets=new Map(await Promise.all(['desktop-connect.js','code-connect.js'].map(async name=>['/'+name,await readFile(new URL('../../web/'+name,import.meta.url),'utf8')])));
+for(const origin of ['http://lt.com:8085','http://local.lt.com:8251'])test('HTTP 扩展、本机消息、无网页网络访问、刷新及断开：'+origin,{skip:!chromium,timeout:60000},async t=>{
+ let callback;const sent=[],directory=await mkdtemp('/private/tmp/km-direct-browser-');
+ const adapter={health:async()=>({ready:true,version:'fixture'}),listSessions:async()=>[{id:'ses_direct_test',title:'Direct test'}],bindSession:async id=>({id,title:'Direct test'}),readShared:async()=>({status:'idle',messages:[],tools:[]}),watch:(id,event,state)=>{callback=event;queueMicrotask(()=>state('connected'));return{ready:Promise.resolve(),close(){}};},sendShared:async(id,text)=>{sent.push(text);return{id:'sent'}},close:async()=>{}};
+ const host=createDesktopHost({directory,direct:true,codexEnabled:false,adapterFactory:()=>adapter});
+ const started=await host.start({origins:[origin]});
+ const profile=await mkdtemp('/private/tmp/km-extension-chrome-');
+ await installExtensionHost({directory:join(directory,'extension-runtime'),profiles:[profile]});
+ const context=await chromium.launchPersistentContext(profile,{headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',ignoreDefaultArgs:['--disable-extensions'],args:['--enable-unsafe-extension-debugging']});
+ const cdp=await context.browser().newBrowserCDPSession();
+ const loaded=await cdp.send('Extensions.loadUnpacked',{path:fileURLToPath(new URL('../../browser-extension/',import.meta.url))});
+ assert.equal(loaded.id,EXTENSION_ID);
+ t.after(async()=>{await context.close();await host.stop();await rm(directory,{recursive:true,force:true});await rm(profile,{recursive:true,force:true});});
+ const page=context.pages()[0];
+ page.on('pageerror',error=>console.error(error.message));
+ await context.route(origin+'/**',async route=>{
+  const path=new URL(route.request().url()).pathname;
+  const body=assets.get(path)||`<!doctype html><button id="prepare">准备</button><button id="connect">连接</button><p id="status"></p><script src="/desktop-connect.js"></script><script src="/code-connect.js"></script><script>
+  window.connector=KmCodeConnector.create();window.open=()=>{throw Error('Unexpected popup')};
+  const accept=s=>{window.session=s;document.querySelector('#status').textContent='connected';};const fail=e=>{document.querySelector('#status').textContent='failed: '+e.message;};
+  document.querySelector('#prepare').onclick=()=>{const result=connector.prepare({onRequest:r=>window.copied=r});window.ready=result.connection.then(accept).catch(fail);};
+  document.querySelector('#connect').onclick=()=>{window.ready=connector.connect().then(accept).catch(fail);};
+  if(connector.hasSaved())window.ready=connector.connect({passive:true}).then(accept).catch(fail);
+  </script>`;
+  await route.fulfill({contentType:path.endsWith('.js')?'text/javascript':'text/html',headers:{'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'none'"},body});
+ });
+ await page.goto(origin+'/');assert.equal(await page.evaluate(()=>isSecureContext),false);await page.click('#prepare');
+ const copied=JSON.parse(Buffer.from(await page.evaluate(()=>copied),'base64url'));
+ assert.equal(host.authorize(host.inspectLink(copied.url).id).transport,'direct');
+ await page.waitForFunction(()=>document.querySelector('#status').textContent==='connected');assert.equal(await page.evaluate(()=>session.transport),'extension/1');
+ assert.equal(context.pages().length,1);assert.equal(await page.evaluate(()=>session.endpoint),started.endpoint);
+ assert.equal(await page.evaluate(()=>document.querySelectorAll('iframe').length),0);
+ await page.evaluate(async()=>{const bound=await session.fetch(session.endpoint+'/v1/bind',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'ses_direct_test',allowControl:true})});if(!bound.ok)throw Error(await bound.text());const result=await session.fetch(session.endpoint+'/v1/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'ses_direct_test',requestId:'00000000-0000-4000-8000-000000000001',text:'direct browser probe'})});if(result.status!==202)throw Error('send failed: '+await result.text());});
+ assert.deepEqual(sent,['direct browser probe']);
+ await page.evaluate(()=>{window.frames=[];window.streaming=(async()=>{const res=await session.fetch(session.endpoint+'/v1/events');const reader=res.body.getReader();try{while(true){const chunk=await reader.read();if(chunk.done)break;frames.push(new TextDecoder().decode(chunk.value));}}catch{}})();});
+ await page.waitForFunction(()=>frames.length>0);
+ callback({id:'native-external',type:'session.text.delta',data:{sessionID:'ses_direct_test',assistantMessageID:'reply',ordinal:0,delta:'原生侧事件到达'}});
+ await page.waitForFunction(()=>frames.join('').includes('原生侧事件到达'));
+ await page.reload();await page.waitForFunction(()=>document.querySelector('#status').textContent==='connected');
+ assert.equal(context.pages().length,1);assert.equal(sent.length,1);
+ const snapshot=await page.evaluate(async()=>(await(await session.fetch(session.endpoint+'/v1/snapshot')).json()).data);
+ assert.equal(snapshot.binding,null);
+ await page.evaluate(()=>connector.close({forget:true}));await page.reload();
+ assert.equal(await page.evaluate(()=>connector.hasSaved()),false);assert.equal(context.pages().length,1);
+ // The match pattern contains a host wildcard for ports, but runtime checks
+ // must reject a different port before opening any native channel.
+ const wrong='http://lt.com:8086';await context.route(wrong+'/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Untrusted port</title>'}));
+ await page.goto(wrong+'/');
+ assert.equal(await page.evaluate(()=>new Promise(resolve=>{const c=new MessageChannel();c.port1.onmessage=()=>resolve(true);window.postMessage({type:'km-agent-extension/1'},location.origin,[c.port2]);setTimeout(()=>{c.port1.close();resolve(false)},250)})),false);
+});
