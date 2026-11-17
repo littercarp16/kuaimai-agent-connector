@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { ensureService, control, connectService, decodeRequest, privateDirectory } from '../../src/headless/service.mjs';
+import { ensureService, control, connectService, decodeRequest, privateDirectory, runService } from '../../src/headless/service.mjs';
 import { challengeFor, createConnectGrants } from '../../src/desktop/connect-grants.mjs';
 const random = () => randomBytes(32).toString('base64url');
 const origin = 'http://local.lt.com:8251';
@@ -26,6 +26,8 @@ test('纯代码后台启动、端口冲突、复用、来源隔离和关闭',{ti
   t.after(async () => { await control(directory,{action:'stop'}).catch(()=>{}); blocker.close(); await delay(200); await rm(directory,{recursive:true,force:true}); });
   const options = { origin, directory, port: blocker.address().port };
   const first = await ensureService(options); assert.equal(first.loginStartup,false); assert.notEqual(Number(new URL(first.endpoint).port), options.port);
+  assert.equal(first.logging.path,join(directory,'service.log'));assert.equal(first.logging.maxBytes,5*1024*1024);assert.equal(first.logging.backups,5);assert.equal(first.logging.writeFailures,0);
+  await assert.rejects(runService(options));assert.equal((await control(directory,{action:'status'})).pid,first.pid,'失败的重复启动不能移除当前实例的控制 socket');
   const second = await ensureService(options); assert.equal(second.pid,first.pid); assert.equal(second.reused,true);
   const r = request(), connected = await connectService(r.encoded,options);
   assert.equal(connected.endpoint,first.endpoint); assert.equal(connected.reused,true);
@@ -39,6 +41,10 @@ test('纯代码后台启动、端口冲突、复用、来源隔离和关闭',{ti
   assert.equal((await resume('https://evil.example')).status,403); assert.equal((await resume(origin)).status,200);
   assert.equal((await fetch(first.endpoint+'/v1/connect/resume',{method:'POST',headers:{...headers,Origin:origin},body:JSON.stringify({websiteOrigin:origin,reconnectToken:result.data.reconnectToken})})).status,403);
   await control(directory,{action:'stop'}); await delay(300); await assert.rejects(readFile(join(directory,'connector.json')),{code:'ENOENT'});
+  const records=(await readFile(join(directory,'service.log'),'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(records.some(r=>r.event==='service.started'&&r.instanceId===first.instanceId&&r.endpoint===first.endpoint));
+  assert.ok(records.some(r=>r.event==='service.stopped'&&r.instanceId===first.instanceId));
+  assert.ok(records.some(r=>r.event==='http.request'&&r.path==='/v1/health'&&r.statusCode===200&&r.durationMs>=0));
 });
 test('重连授权仅在当前实例和已授权来源内有效且会到期',()=>{
   let now=0;const grants=createConnectGrants({reconnect:true,now:()=>now}),r=request(),parsed=decodeRequest(r.encoded),endpoint='http://127.0.0.1:19234',instanceId='fixture';

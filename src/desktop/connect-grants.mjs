@@ -11,8 +11,9 @@ export function parseConnectURL(value, allowedOrigins) {
   const url = new URL(value);
   if (url.protocol !== 'km-agent:' || url.hostname !== 'connect' || !['', '/'].includes(url.pathname) || url.username || url.password || url.port || url.hash) bad();
   const keys = ['origin', 'callback', 'state', 'challenge', 'browser'];
-  if (keys.some(k => url.searchParams.getAll(k).length !== 1) || [...url.searchParams.keys()].some(k => ![...keys, 'transport'].includes(k))) bad();
+  if (keys.some(k => url.searchParams.getAll(k).length !== 1) || [...url.searchParams.keys()].some(k => ![...keys, 'transport', 'provider'].includes(k))) bad();
   if (url.searchParams.has('transport') && (url.searchParams.getAll('transport').length !== 1 || url.searchParams.get('transport') !== 'direct')) bad();
+  if (url.searchParams.has('provider') && (url.searchParams.getAll('provider').length !== 1 || !['codex', 'qwen'].includes(url.searchParams.get('provider')))) bad();
   const request = Object.fromEntries(url.searchParams);
   if (!validWebOrigin(request.origin) || !allowedOrigins.includes(request.origin) || !code.test(request.state) || !code.test(request.challenge)) bad();
   const callback = new URL(request.callback);

@@ -6,6 +6,7 @@ import { createCodexState, publicText, nativeKey } from './codex-state.mjs';
 import { publicQuestion, questionAnswer, publicApproval } from '../../session/shared-state.mjs';
 import { detailPolicy } from '../../tools/tool-details.mjs';
 import { addProjectNames } from './codex-projects.mjs';
+import { normalizePageContext, codexPageContext } from '../../protocol/page-context.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRAPPER = /^ses_codex_([0-9a-f]{32})$/;
@@ -24,8 +25,9 @@ const normalThread = thread => UUID.test(thread?.id || '') && !thread.archived &
   ['cli', 'vscode', 'exec', 'appServer'].includes(thread.source);
 const meta = (thread, directory) => ({ id: 'ses_codex_' + thread.id.replaceAll('-', ''),
   title: publicText(thread.name || thread.preview || '未命名会话').slice(0, 100), provider: 'codex', nativeThreadId: thread.id, directory });
-// Full turn pages from 0.168.0 can exceed the RPC frame limit even for ordinary TUI history.
-const historyPage = version => ({ itemsView: 'full', limit: ['0.168.0', '0.169.0'].includes(version) ? 5 : 20, sortDirection: 'desc' });
+// Modern turns include complete tool outputs. Keep each page to one whole turn;
+// the bounded recent-history budget below stops before adding older pages.
+const historyPage = version => ({ itemsView: 'full', limit: ['0.168.0', '0.169.0'].includes(version) ? 1 : 20, sortDirection: 'desc' });
 function unwrap(id) {
   const match = typeof id === 'string' && WRAPPER.exec(id); if (!match) throw err('CODEX_SCOPE_CHANGED');
   const s = match[1]; return [s.slice(0, 8), s.slice(8, 12), s.slice(12, 16), s.slice(16, 20), s.slice(20)].join('-');
@@ -98,7 +100,9 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           current.rpc.version !== discovered.version || current.rpc.closed)) invalidate();
         if (!current) {
           const openingEpoch = epoch;
-          const rpc = await connect({ socketPath: discovered.socketPath, version: discovered.version });
+          // A single tool-rich turn may exceed the generic 1 MiB RPC default.
+          // Keep transport bounded; history and live buffers retain their own smaller budgets.
+          const rpc = await connect({ socketPath: discovered.socketPath, version: discovered.version, maxBytes: 4 * 1024 * 1024 });
           if (closed || openingEpoch !== epoch || rpc.closed || rpc.instanceId !== discovered.instanceId || rpc.version !== discovered.version) {
             rpc.close(); throw err();
           }
@@ -155,7 +159,12 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
       if (!Array.isArray(page?.data)) throw err('CODEX_READ_FAILED');
       if (method === 'thread/list' && page.data.length > params.limit) throw err('CODEX_DISCOVERY_LIMIT');
       bytes += Buffer.byteLength(JSON.stringify(page));
-      if (bytes > byteLimit) throw err(method === 'thread/list' ? 'CODEX_DISCOVERY_LIMIT' : 'CODEX_READ_FAILED');
+      if (bytes > byteLimit) {
+        // Only omit older complete history pages after the newest page was read.
+        // Never accept an oversized initial turn or incomplete discovery/items.
+        if (method === 'thread/turns/list' && data.length) return data;
+        throw err(method === 'thread/list' ? 'CODEX_DISCOVERY_LIMIT' : 'CODEX_READ_FAILED');
+      }
       data.push(...page.data);
       if (!page.nextCursor) return data;
       if (typeof page.nextCursor !== 'string' || page.nextCursor.length > 8000 || cursors.has(page.nextCursor)) throw err('CODEX_READ_FAILED');
@@ -477,16 +486,19 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     await drain(context); check(context.capture, context);
     return publicPending(context, kind);
   }
-  function sendShared(id, text, { requestId, signal, uploads = [], references = [], assertCurrent = () => {} } = {}) {
+  function sendShared(id, text, { requestId, signal, uploads = [], references = [], pageContext, assertCurrent = () => {} } = {}) {
     let context;
     try {
       context = get(id);
       if (signal?.aborted || !Array.isArray(uploads) || !Array.isArray(references) || uploads.length || references.length ||
         typeof text !== 'string' || !text.trim() || text.length > 100000 || typeof requestId !== 'string' || !requestId || requestId.length > 200) throw err('NOT_SUBMITTED');
-      const signature = hash(text), sendKey = JSON.stringify([id, requestId]), old = sends.get(sendKey);
+      const page = normalizePageContext(pageContext);
+      if (page && context.capture.rpc.version !== '0.169.0') throw err('NOT_SUBMITTED');
+      const additionalContext = codexPageContext(page);
+      const signature = hash(JSON.stringify({ text, pageContext: page || null })), sendKey = JSON.stringify([id, requestId]), old = sends.get(sendKey);
       if (old) { if (old.signature !== signature) throw err('NOT_SUBMITTED'); return old.promise; }
       // Never evict an unknown/successful submission and accidentally resend it.
-      const bytes = Buffer.byteLength(text) + 256;
+      const bytes = Buffer.byteLength(text) + Buffer.byteLength(JSON.stringify(additionalContext || {})) + 256;
       if (sends.size >= 256 || sendBytes + bytes > byteLimit) throw err('NOT_SUBMITTED');
       const entry = { signature, bytes };
       sendBytes += bytes;
@@ -502,7 +514,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           if (thread.status?.type === 'active' && !turnId) throw err('NOT_SUBMITTED');
           const clientId = 'km_' + hash(JSON.stringify([id, requestId])).slice(0, 48);
           const params = { threadId: context.nativeId, input: [{ type: 'text', text, text_elements: [] }], clientUserMessageId: clientId,
-            ...(turnId ? { expectedTurnId: turnId } : {}) };
+            ...(turnId ? { expectedTurnId: turnId } : {}), ...(additionalContext ? { additionalContext } : {}) };
           submitted = true;
           let result;
           try { result = await request(context.capture, turnId ? 'turn/steer' : 'turn/start', params, context, signal); }
@@ -591,7 +603,8 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     }
   }
   const capabilities = Object.freeze({ send: true, interrupt: true, questions: true, approvals: true, toolDetails: true,
-    attachments: false, fileSearch: false, newSession: false, followSessions: false });
+    attachments: false, fileSearch: false, newSession: false, followSessions: false,
+    get pageContext() { return !closed && current?.rpc.version === '0.169.0'; } });
   return {
     descriptor: Object.freeze({ id: 'codex', status: 'native', capabilities }), capabilities,
     health, listSessions, bindSession, readShared, watch, sendShared, interruptShared, readToolDetail,

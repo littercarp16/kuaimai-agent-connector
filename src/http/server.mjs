@@ -11,7 +11,11 @@ import{createWorkBuddyStore,WORKBUDDY_ADAPTER,WORKBUDDY_CAPABILITIES,WorkBuddyFa
 import{nextSourceOrder}from'../session/source-order.mjs';
 import{redactText}from'../tools/display-safety.mjs';
 import{nativeCapabilities}from'../adapters/native-registry.mjs';
+import { QwenDesktopFailure } from '../runtime/qwen-desktop.mjs';
 import { CodexDesktopFailure } from '../runtime/codex-desktop.mjs';
+import { normalizePageContext } from '../protocol/page-context.mjs';
+import { nullLogger } from '../runtime/logger.mjs';
+import { observeRequest } from './request-log.mjs';
 
 const M=globalThis.KmAgentModel, BUSY=new Set(['running','stopping','unknown']);
 class Failure extends Error {constructor(status,message){super(message);this.status=status;}}
@@ -19,7 +23,7 @@ const fail=(status,message)=>{throw new Failure(status,message);};
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
 const equal=(a,b)=>{const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);};
 
-export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'],pairCode=String(randomInt(100000,1000000)),onPairCode=()=>{},publisherKey=randomBytes(32).toString('base64url'),publisherCommand=null,onBindings=()=>{},autoTrust=null,now=Date.now,enableWorkBuddy=false,workBuddyOptions={},enableMultiAgentFollow=false,codexDesktop=null,desktopConnect=null,projectIndependentSessions=false}={}) {
+export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'],pairCode=String(randomInt(100000,1000000)),onPairCode=()=>{},publisherKey=randomBytes(32).toString('base64url'),publisherCommand=null,onBindings=()=>{},autoTrust=null,now=Date.now,enableWorkBuddy=false,workBuddyOptions={},enableMultiAgentFollow=false,codexDesktop=null,qwenDesktop=null,desktopConnect=null,projectIndependentSessions=false,logger=nullLogger}={}) {
   if(!adapter?.health)throw Error('需要 Agent 适配器');
   const origins=new Set(allowedOrigins.map(value=>{const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.origin!==value)throw Error('来源必须是精确HTTP Origin');return value;}));
   if(autoTrust&&(!origins.has(autoTrust.origin)||!/^http:\/\/127\.0\.0\.1:\d+$/.test(autoTrust.origin)||autoTrust.sessionId!=null&&!/^ses[\w-]+$/.test(autoTrust.sessionId)))throw Error('自动授权必须指定受信loopback来源及有效会话');
@@ -27,10 +31,12 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   const instanceId=randomUUID(),clients=new Map(),streams=new Set(),rates=new Map(),hubs=new Map(),cleanups=new Set();
   let code=pairCode,codeExpires=now()+10*60e3,closed=false,agent={ready:false,version:null,message:'正在检查 OpenCode'};
   let healthPromise=null,healthAt=0,follow;
+  function connected(client) { client.logId=randomUUID(); logger.info('client.connected',{instanceId,clientId:client.logId,origin:client.websiteOrigin||client.origin}); }
+  function disconnected(client,reason) { if(client.logDisconnected)return;client.logDisconnected=true;logger.info('client.disconnected',{instanceId,clientId:client.logId,origin:client.websiteOrigin||client.origin,reason}); }
   const workBuddy=enableWorkBuddy?createWorkBuddyStore({...workBuddyOptions,...(enableMultiAgentFollow?{workspaceId:workBuddyOptions.workspaceId||'ws_'+createHash('sha256').update(process.cwd()).digest('hex')}:{ }),instanceId,publisherKey,now,onOpen:candidate=>{if(enableMultiAgentFollow)follow.offer({...candidate,reason:'task-open'});},onChange:()=>{for(const client of clients.values())if(client.active){push(client);follow.tick(client);}}}):null;
   const isWorkBuddy=client=>client.hub?.session.provider==='workbuddy';
-  const publicHealth=(origin)=>({service:'kuaimai-agent-connector',protocolVersion:2,interactionProtocol:PROTOCOL,instanceId,mode:'shared',agent,adapter:adapter.descriptor||{id:'opencode',status:'native'},capabilities:{projectIndependentSessions,codexDesktopRestart:Boolean(codexDesktop),codexDesktopDockPersistence:codexDesktop?.capabilities?.dockPersistence===true,multiAgentFollow:enableMultiAgentFollow,autoHandshake:Boolean(autoTrust&&autoTrust.origin===origin),workbuddyPublish:Boolean(workBuddy),newSession:typeof adapter.createSharedSession==='function',workspaceFiles:typeof adapter.searchWorkspaceFiles==='function',attachments:typeof adapter.sendShared==='function',nativeQuestions:typeof adapter.listQuestions==='function'&&typeof adapter.replyQuestion==='function'&&typeof adapter.rejectQuestion==='function',followSessions:typeof adapter.watchRelevantSessions==='function',toolDetails:true,toolDetailFetch:typeof adapter.readToolDetail==='function',uiCommands:true,uiReceipts:true,demo:true,submitPrompt:agent.ready&&(typeof adapter.sendShared==='function'||typeof adapter.send==='function'),sharedSession:typeof adapter.bindSession==='function',nativeEvents:typeof adapter.watch==='function',cancelRun:typeof adapter.interruptShared==='function'||typeof adapter.interrupt==='function',previewArtifacts:true,businessWrite:false}});
-  async function checkHealth(){if(healthPromise)return healthPromise;if(healthAt&&now()-healthAt<5000)return agent;healthPromise=Promise.resolve().then(()=>adapter.health()).then(value=>{agent={ready:value.ready===true,version:typeof value.version==='string'?value.version:null,message:String(value.message||'').slice(0,180)};healthAt=now();return agent;}).catch(()=>{agent={ready:false,version:null,message:'OpenCode 状态检查失败'};return agent;}).finally(()=>{healthPromise=null;});return healthPromise;}
+  const publicHealth=(origin)=>({service:'kuaimai-agent-connector',protocolVersion:2,interactionProtocol:PROTOCOL,instanceId,mode:'shared',agent,adapter:adapter.descriptor||{id:'opencode',status:'native'},capabilities:{projectIndependentSessions,qwenDesktopPreparation:Boolean(qwenDesktop),codexDesktopRestart:Boolean(codexDesktop),codexDesktopDockPersistence:codexDesktop?.capabilities?.dockPersistence===true,multiAgentFollow:enableMultiAgentFollow,autoHandshake:Boolean(autoTrust&&autoTrust.origin===origin),workbuddyPublish:Boolean(workBuddy),newSession:typeof adapter.createSharedSession==='function',workspaceFiles:typeof adapter.searchWorkspaceFiles==='function',attachments:typeof adapter.sendShared==='function',nativeQuestions:typeof adapter.listQuestions==='function'&&typeof adapter.replyQuestion==='function'&&typeof adapter.rejectQuestion==='function',followSessions:typeof adapter.watchRelevantSessions==='function',toolDetails:true,toolDetailFetch:typeof adapter.readToolDetail==='function',uiCommands:true,uiReceipts:true,demo:true,submitPrompt:agent.ready&&(typeof adapter.sendShared==='function'||typeof adapter.send==='function'),sharedSession:typeof adapter.bindSession==='function',nativeEvents:typeof adapter.watch==='function',cancelRun:typeof adapter.interruptShared==='function'||typeof adapter.interrupt==='function',previewArtifacts:true,businessWrite:false}});
+  async function checkHealth(){if(healthPromise)return healthPromise;if(healthAt&&now()-healthAt<5000)return agent;healthPromise=Promise.resolve().then(()=>adapter.health()).then(value=>{agent={ready:value.ready===true,version:typeof value.version==='string'?value.version:null,message:String(value.message||'').slice(0,180)};healthAt=now();return agent;}).catch(error=>{logger.error('agent.health_failed',{instanceId,error});agent={ready:false,version:null,message:'OpenCode 状态检查失败'};return agent;}).finally(()=>{healthPromise=null;});return healthPromise;}
   const nativeFor=client=>client.hub?.adapter||adapter;
   const agentFor=client=>adapter.agentFor&&client.hub?adapter.agentFor(nativeFor(client)):agent;
   const capabilities=client=>isWorkBuddy(client)?{...publicHealth(client.origin).capabilities,...WORKBUDDY_CAPABILITIES,nativeApprovals:false}:{...publicHealth(client.origin).capabilities,...nativeCapabilities(nativeFor(client),agentFor(client))};
@@ -55,7 +61,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   function retireHub(hub){const job=hub.close();cleanups.add(job);job.then(()=>cleanups.delete(job),()=>cleanups.delete(job));return job;}
   async function release(client,hub){if(!hub)return;hub.remove(client);hub.pending?.delete(client);if(!hub.members.size&&!hub.pending?.size){if(hubs.get(hub.session.id)===hub)hubs.delete(hub.session.id);await retireHub(hub);}}
   async function detach(client){const attached=new Set([client.hub,client.pendingHub,...(client.subscriptions?.values()||[])].filter(Boolean));client.hub=null;client.pendingHub=null;client.subscriptions?.clear();client.canControl=false;const jobs=[...attached].map(hub=>release(client,hub));changedBindings();await Promise.all(jobs);}
-  function revokeExpired(){for(const[token,client]of clients)if(client.expires<now()){client.active=false;clients.delete(token);for(const stream of client.streams)stream.end();follow.reconcile();void detach(client).catch(()=>{});}}
+  function revokeExpired(){for(const[token,client]of clients)if(client.expires<now()){disconnected(client,'expired');client.active=false;clients.delete(token);for(const stream of client.streams)stream.end();follow.reconcile();void detach(client).catch(()=>{});}}
   async function bind(client,input,{isCurrent=()=>true}={}){
     const wb=workBuddy?.has(input.sessionId)===true;
     let native=adapter;if(!wb&&adapter.forSession){try{native=adapter.forSession(input.sessionId);}catch{fail(404,'该原生来源未知或不可用，不回退到其他Agent');}}
@@ -102,8 +108,8 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     }finally{client.bindingBusy=false;follow.tick(client);}
   }
   function authenticate(req,origin){const token=req.headers.authorization?.replace(/^Bearer /,'');const client=token&&clients.get(token);if(!client||!client.active||client.origin!==origin||client.expires<now())fail(401,'连接授权已失效，请重新配对');return client;}
-  function makeClient(origin){if(clients.size>=12)fail(409,'本次连接器授权数已达上限');const token=randomBytes(32).toString('base64url'),client={origin,active:true,expires:now()+8*3600e3,revision:0,sessionId:null,run:null,streams:new Set(),requests:new Map()};follow.init(client,autoTrust?.origin===origin);clients.set(token,client);return{token,client};}
-  function releaseDirectClient(token){const client=clients.get(token);if(!client)return;client.active=false;clearTimeout(client.timer);for(const stream of client.streams)stream.end();clients.delete(token);follow.reconcile();void detach(client).catch(()=>{});}
+  function makeClient(origin,websiteOrigin=origin){if(clients.size>=12)fail(409,'本次连接器授权数已达上限');const token=randomBytes(32).toString('base64url'),client={origin,active:true,expires:now()+8*3600e3,revision:0,sessionId:null,run:null,streams:new Set(),requests:new Map()};client.websiteOrigin=websiteOrigin;follow.init(client,autoTrust?.origin===origin);clients.set(token,client);connected(client);return{token,client};}
+  function releaseDirectClient(token,reason='replaced'){const client=clients.get(token);if(!client)return;disconnected(client,reason);client.active=false;clearTimeout(client.timer);for(const stream of client.streams)stream.end();clients.delete(token);follow.reconcile();void detach(client).catch(()=>{});}
   async function body(req,keys,limit=20000){if(!req.headers['content-type']?.startsWith('application/json')||req.headers['x-km-agent']!=='1')fail(415,'需要受控的JSON请求');const chunks=[];let bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>limit)fail(413,'请求内容过长');chunks.push(chunk);}let value;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{fail(400,'JSON格式无效');}if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!keys.includes(key)))fail(400,'请求字段不符合约定');return value;}
   function updateOutput(client,messages) {
     const run=client.run,artifacts=new Map();let plan=null;const warnings=[];
@@ -176,6 +182,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   }
   follow=createFollowManager({adapter,autoTrust,clients:()=>clients.values(),bind,push,now,enableMultiAgentFollow,workBuddy:Boolean(workBuddy),canSwitch});
   const server=http.createServer(async(req,res)=>{
+    const requestLog=observeRequest(req,res,{logger,instanceId,origins});
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
     let writingClient=null,writingHub=null;
     try {
@@ -232,12 +239,12 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         if(value.instanceId!==instanceId)fail(409,'连接器实例已变化，请重新复制连接请求');
         let grant;
         try{
-          if(revoke){releaseDirectClient(desktopConnect.direct.revoke({...value,origin}));return json(res,200,{ok:true,data:null});}
+          if(revoke){releaseDirectClient(desktopConnect.direct.revoke({...value,origin}),'revoked');return json(res,200,{ok:true,data:null});}
           grant=desktopConnect.direct[claim?'claim':'resume']({...value,origin});
         }catch{fail(403,'本页接入授权无效或已过期，请重新复制连接请求');}
         if(!grant)return json(res,202,{ok:true,data:{pending:true}});
         releaseDirectClient(grant.previousClient);
-        const {token,client}=makeClient(origin);client.websiteOrigin=origin;
+        const {token,client}=makeClient(origin);requestLog.client(client);client.websiteOrigin=origin;
         client.expires=Math.min(client.expires,grant.expiresAt);
         desktopConnect.direct.attach(claim?grant.reconnectToken:value.reconnectToken,token);
         return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client),...(claim?{reconnectToken:grant.reconnectToken}:{})}});
@@ -247,19 +254,19 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         if(!desktopConnect)fail(404,'桌面连接入口未启用');
         rate(origin+':connect',10);const value=await body(req,['ticket','state','verifier','websiteOrigin']);
         let grant;try{grant=desktopConnect.consume({...value,requestOrigin:origin,endpoint:localEndpoint,instanceId});}catch{fail(403,'接入请求无效、已过期或不属于当前网页');}
-        const {token,client}=makeClient(origin);client.websiteOrigin=grant.websiteOrigin;
+        const {token,client}=makeClient(origin,grant.websiteOrigin);requestLog.client(client);
         return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client),...(grant.reconnectToken?{reconnectToken:grant.reconnectToken}:{})}});
       }
       if(req.url==='/v1/connect/resume'&&req.method==='POST'){
         if(!desktopConnect?.resume)fail(404,'后台连接入口未启用');
         rate(origin+':connect',10);const value=await body(req,['reconnectToken','websiteOrigin']);
         let grant;try{grant=desktopConnect.resume({...value,requestOrigin:origin,endpoint:localEndpoint,instanceId});}catch{fail(403,'后台连接授权已失效，请重新复制连接请求');}
-        const {token,client}=makeClient(origin);client.websiteOrigin=grant.websiteOrigin;
+        const {token,client}=makeClient(origin,grant.websiteOrigin);requestLog.client(client);
         return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client)}});
       }
       if(req.url==='/v1/handshake'&&req.method==='POST'){
-        await body(req,[]);if(!autoTrust||autoTrust.origin!==origin)fail(403,'此来源未被本机启动器授权');rate(origin+':handshake',20);if(autoTrust.sessionId)await checkHealth();const{token,client}=makeClient(origin);
-        try{if(autoTrust.sessionId)await bind(client,{sessionId:autoTrust.sessionId,allowControl:autoTrust.allowControl===true});if(enableMultiAgentFollow&&client.follow.enabled){const latest=workBuddy?.incoming()[0];if(latest)await follow.offer({...latest,reason:'cached-task'},client);}await follow.ensure();return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client)}});}catch(error){client.active=false;clients.delete(token);follow.reconcile();await detach(client);throw error;}
+        await body(req,[]);if(!autoTrust||autoTrust.origin!==origin)fail(403,'此来源未被本机启动器授权');rate(origin+':handshake',20);if(autoTrust.sessionId)await checkHealth();const{token,client}=makeClient(origin);requestLog.client(client);
+        try{if(autoTrust.sessionId)await bind(client,{sessionId:autoTrust.sessionId,allowControl:autoTrust.allowControl===true});if(enableMultiAgentFollow&&client.follow.enabled){const latest=workBuddy?.incoming()[0];if(latest)await follow.offer({...latest,reason:'cached-task'},client);}await follow.ensure();return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client)}});}catch(error){disconnected(client,'handshake_failed');client.active=false;clients.delete(token);follow.reconcile();await detach(client);throw error;}
       }
       if(req.url==='/v1/pair'&&req.method==='POST') {
         rate(origin+':pair',10);const value=await body(req,['code']);
@@ -267,11 +274,22 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         revokeExpired();
         if(clients.size>=4)fail(409,'本次连接器配对数已达上限，请先撤销不用的连接');
         const token=randomBytes(32).toString('base64url'),client={origin,active:true,expires:now()+8*3600e3,revision:0,sessionId:null,run:null,streams:new Set(),requests:new Map()};
-        follow.init(client,false);clients.set(token,client);code=String(randomInt(100000,1000000));codeExpires=now()+10*60e3;onPairCode(code);
+        follow.init(client,false);clients.set(token,client);connected(client);requestLog.client(client);code=String(randomInt(100000,1000000));codeExpires=now()+10*60e3;onPairCode(code);
         await checkHealth();return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client)}});
       }
-      if(!['/v1/snapshot','/v1/events','/v1/run','/v1/demo','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/codex/desktop/restart'].includes(req.url))fail(404,'接口不存在');
-      const client=authenticate(req,origin);
+      if(!['/v1/snapshot','/v1/events','/v1/run','/v1/demo','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/codex/desktop/restart','/v1/qwen/desktop','/v1/qwen/desktop/ensure'].includes(req.url))fail(404,'接口不存在');
+      const client=authenticate(req,origin);requestLog.client(client);
+      if(['/v1/qwen/desktop','/v1/qwen/desktop/ensure'].includes(req.url)){
+        if(!qwenDesktop)fail(404,'千问自动准备未启用，请更新本机连接器');
+        if(req.url==='/v1/qwen/desktop'&&req.method==='GET')return json(res,200,{ok:true,data:qwenDesktop.status()});
+        if(req.url!=='/v1/qwen/desktop/ensure'||req.method!=='POST')fail(405,'请求方法不支持');
+        const input=await body(req,['instanceId','requestId']);
+        if(input.instanceId!==instanceId)fail(409,'连接器实例已变化，请重新连接');
+        if(typeof input.requestId!=='string')fail(400,'准备请求标识无效');
+        const assertAllowed=()=>{if(!client.active||client.expires<now())fail(401,'千问准备授权已失效');};
+        rate(origin+':qwen-prepare',20);
+        return json(res,202,{ok:true,data:qwenDesktop.ensure({requestId:input.requestId,assertAllowed})});
+      }
       if(['/v1/codex/desktop','/v1/codex/desktop/restart'].includes(req.url)){
         if(!codexDesktop)fail(404,'桌面端切换未启用');
         if(req.url==='/v1/codex/desktop'&&req.method==='GET')return json(res,200,{ok:true,data:codexDesktop.status()});
@@ -322,7 +340,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(['/v1/sessions','/v1/sources'].includes(req.url)&&req.method==='GET'){
         if(req.url==='/v1/sources'&&!workBuddy&&!enableMultiAgentFollow)fail(404,'接口不存在');
         if(!workBuddy&&!enableMultiAgentFollow){if(!adapter.listSessions)fail(503,'适配器不支持共享会话');return json(res,200,{ok:true,data:await adapter.listSessions()});}
-        let primary=[],status='available';try{if(!adapter.listSessions)throw Error();primary=await adapter.listSessions();if(!Array.isArray(primary))throw Error();}catch{primary=[];status='unavailable';}
+        let primary=[],status='available';try{if(!adapter.listSessions)throw Error();primary=await adapter.listSessions();if(!Array.isArray(primary))throw Error();}catch(error){logger.error('agent.sessions_failed',{instanceId,requestId:requestLog.requestId,error});primary=[];status='unavailable';}
         const provider=adapter.descriptor?.id||'opencode',primarySource={provider,status,adapter:publicHealth().adapter,capabilities:publicHealth().capabilities,...(status==='unavailable'?{message:'原生会话列表暂不可用；未将失败表示为空列表成功。'}:{})};
         const sources=[...(adapter.sourceDiagnostics?.()||[primarySource]),...(workBuddy?[{provider:'workbuddy',status:'available',adapter:WORKBUDDY_ADAPTER,capabilities:WORKBUDDY_CAPABILITIES}]:[])],sessions=[...primary.map(s=>({...s,provider:s.provider||provider,status:hubs.get(s.id)?.projection.value.status||s.status||'unknown',adapter:s.adapter||publicHealth().adapter,capabilities:s.capabilities||publicHealth().capabilities})),...(workBuddy?.list()||[])];
         return json(res,200,{ok:true,data:req.url==='/v1/sources'?{sessions,sources}:sessions,...(req.url==='/v1/sessions'?{sources}:{})});
@@ -332,29 +350,36 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(req.url==='/v1/snapshot'&&req.method==='GET'){if(client.hub&&!isWorkBuddy(client)&&adapter.healthFor)await adapter.healthFor(nativeFor(client));else await checkHealth();return json(res,200,{ok:true,data:snapshot(client)});}
       if(req.url==='/v1/events'&&req.method==='GET') {
         if(client.streams.size>=3)fail(429,'实时连接数过多');
+        const streamId=randomUUID(),streamStarted=performance.now();
+        logger.info('stream.opened',{...requestLog.metadata,streamId,transport:'sse'});
         res.writeHead(200,{'Content-Type':'text/event-stream','Connection':'keep-alive'});client.streams.add(res);streams.add(res);
         res.write('event: snapshot\ndata: '+JSON.stringify(snapshot(client))+'\n\n');
         const timer=setInterval(()=>{if(client.expires<now()){res.end();return;}res.write(': heartbeat\n\n');},10000);timer.unref();
-        res.on('close',()=>{clearInterval(timer);client.streams.delete(res);streams.delete(res);});return;
+        res.on('close',()=>{clearInterval(timer);client.streams.delete(res);streams.delete(res);logger.info('stream.closed',{...requestLog.metadata,streamId,transport:'sse',durationMs:Math.round((performance.now()-streamStarted)*100)/100,reason:closed?'service_stopped':client.logDisconnected?'client_disconnected':'transport_closed'});});return;
       }
       if(req.method!=='POST')fail(405,'请求方法不支持');
       if(req.url==='/v1/run'||req.url==='/v1/demo') {
         const originalHub=client.hub,originalEpoch=client.bindingEpoch,originalTransportEpoch=client.hub?.transportEpoch;
         if(req.url==='/v1/run'&&!originalHub&&autoTrust?.origin===client.origin&&!autoTrust.sessionId)fail(403,'无会话入口仅观察，请先明确绑定原生会话并授权控制');
         if(req.url==='/v1/run'&&originalHub&&!client.canControl)fail(403,'此绑定仅可观察，尚未授权网页输入');
-        const value=await body(req,req.url==='/v1/run'?['requestId','text','sessionId','uploads','references']:['requestId'],req.url==='/v1/run'?FILE_LIMITS.body:20000);
+        const value=await body(req,req.url==='/v1/run'?['requestId','text','sessionId','uploads','references','pageContext']:['requestId'],req.url==='/v1/run'?FILE_LIMITS.body:20000);
         if(typeof value.requestId!=='string'||!/^[-\da-f]{36}$/.test(value.requestId))fail(400,'请求标识无效');
         if(req.url==='/v1/run'){
+          if(value.pageContext!==undefined){
+            try{value.pageContext=normalizePageContext(value.pageContext,client.origin);}catch(error){fail(400,error.message);}
+            if(!originalHub)fail(409,'页面上下文需要明确绑定的原生会话');
+          }
           if(typeof value.text!=='string'||value.text.length>4000||!value.text.trim()&&!value.uploads?.length&&!value.references?.length)fail(400,'请输入需求或添加附件');if(!Array.isArray(value.references||[])||(value.references||[]).some(p=>typeof p!=='string'||p.length>500)||(value.uploads||[]).length+(value.references||[]).length>FILE_LIMITS.count)fail(400,'附件或引用格式无效');try{normalizeUploads(value.uploads||[]);}catch(error){fail(400,error.message);}if(!value.text.trim())value.text='请查看附件。';
           if(originalHub&&adapter.healthFor)await adapter.healthFor(nativeFor(client));else await checkHealth();if(!agentFor(client).ready)fail(503,'当前原生来源未就绪，未发送需求');if(originalHub&&!capabilities(client).submitPrompt)fail(409,'当前原生来源未开放网页发送能力');if((value.uploads?.length||value.references?.length)&&!capabilities(client).attachments)fail(409,'当前原生来源尚不支持此附件合同，未发送');
         }
+        if(value.pageContext&&!capabilities(client).pageContext)fail(409,'当前 Agent 或连接器不支持独立页面上下文，请更新后重新连接；本条需求未发送');
         if(!client.active||client.expires<now())fail(401,'授权已失效');
         if(client.hub!==originalHub||client.bindingEpoch!==originalEpoch||(value.sessionId&&originalHub?.session.id!==value.sessionId))fail(409,'绑定已变化，原需求未发送；请核对当前会话后重新操作');
         if(client.hub){
           if(req.url==='/v1/demo')fail(409,'共享会话不插入模拟过程；解除绑定后可单独体验演示');
           if(!client.canControl)fail(403,'此绑定仅可观察，尚未授权网页输入');
           const assertSubmissionCurrent=()=>{if(!client.active||client.expires<now())fail(401,'发送授权已失效');if(client.hub!==originalHub||client.bindingEpoch!==originalEpoch||originalHub.transport!=='connected'||originalHub.transportEpoch!==originalTransportEpoch||client.bindingBusy)fail(409,'发送所属来源或原生连接已变化');if(!client.canControl)fail(403,'网页控制授权已撤回');};
-          try{assertSubmissionCurrent();const receipt=await originalHub.submit(client,value,{assertCurrent:assertSubmissionCurrent});assertSubmissionCurrent();return json(res,202,{ok:true,data:receipt});}catch(error){if(error?.code==='NOT_SUBMITTED'&&error.reason==='busy')fail(409,'千问办公本轮仍在运行，消息未发送。请等本轮结束后再发送。');if(error?.code==='NOT_SUBMITTED')fail(409,'发送前会话或控制授权已变化，本条消息未提交；请核对后再操作');fail(409,'需求提交未获完整确认，不会自动重发；请核验本地会话');}
+          try{assertSubmissionCurrent();const receipt=await originalHub.submit(client,value,{assertCurrent:assertSubmissionCurrent});assertSubmissionCurrent();return json(res,202,{ok:true,data:receipt});}catch(error){requestLog.error(error);if(error?.code==='NOT_SUBMITTED'&&error.reason==='native_prompt_whitespace')fail(409,'千问当前接口会移除消息首尾空白，本条消息未发送。请确认并调整输入后再发送。');if(error?.code==='NOT_SUBMITTED'&&error.reason==='page_context_unsupported')fail(409,'千问当前接口尚不支持独立页面上下文，本条消息未发送。');if(error?.code==='NOT_SUBMITTED'&&error.reason==='busy')fail(409,'千问办公本轮仍在运行，消息未发送。请等本轮结束后再发送。');if(error?.code==='NOT_SUBMITTED')fail(409,'发送前会话或控制授权已变化，本条消息未提交；请核对后再操作');fail(409,'需求提交未获完整确认，不会自动重发；请核验本地会话');}
         }
         if(value.uploads?.length||value.references?.length)fail(409,'附件只支持已绑定的原生共享会话');
         return json(res,202,{ok:true,data:begin(client,req.url==='/v1/demo'?'demo':'opencode',value)});
@@ -368,13 +393,13 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(req.url==='/v1/reset'&&client.hub)fail(409,'共享会话不自动新建或清空；请在连接面板更换绑定');
       if(req.url==='/v1/stop'){await stop(client);return json(res,200,{ok:true,data:snapshot(client)});}
       if(req.url==='/v1/reset'){if(client.run&&BUSY.has(client.run.status))fail(409,'执行中不能新建会话');client.run=null;client.sessionId=null;push(client);return json(res,200,{ok:true,data:snapshot(client)});}
-      if(req.url==='/v1/disconnect'){client.active=false;clearTimeout(client.timer);for(const stream of client.streams)stream.end();clients.delete(req.headers.authorization.slice(7));follow.reconcile();if(client.hub||client.pendingHub)void detach(client).catch(()=>{});else void stop(client).catch(()=>{});return json(res,200,{ok:true,data:null});}
+      if(req.url==='/v1/disconnect'){disconnected(client,'requested');client.active=false;clearTimeout(client.timer);for(const stream of client.streams)stream.end();clients.delete(req.headers.authorization.slice(7));follow.reconcile();if(client.hub||client.pendingHub)void detach(client).catch(()=>{});else void stop(client).catch(()=>{});return json(res,200,{ok:true,data:null});}
       fail(404,'接口不存在');
-    }catch(error){const known=error instanceof Failure||error instanceof WorkBuddyFailure||error instanceof CodexDesktopFailure;if(!res.headersSent)json(res,known?error.status:500,{ok:false,error:{message:known?error.message:'本地连接器请求失败，请在本地确认服务状态',...(error instanceof WorkBuddyFailure&&error.code==='WORKBUDDY_NOT_READY'?{code:error.code}:{})}});else res.end();}
+    }catch(error){requestLog.error(error);const known=error instanceof Failure||error instanceof WorkBuddyFailure||error instanceof CodexDesktopFailure||error instanceof QwenDesktopFailure;if(!res.headersSent)json(res,known?error.status:500,{ok:false,error:{message:known?error.message:'本地连接器请求失败，请在本地确认服务状态',...(error instanceof WorkBuddyFailure&&error.code==='WORKBUDDY_NOT_READY'?{code:error.code}:{})}});else res.end();}
     finally{if(writingHub)writingHub.inflightWrites--;if(writingClient){writingClient.writesBusy--;follow.tick(writingClient);}}
   });
   server.requestTimeout=10000;server.headersTimeout=10000;
   const leaseTimer=setInterval(()=>{revokeExpired();workBuddy?.sweep();},10000);leaseTimer.unref();
-  async function close(){if(closed)return;closed=true;desktopConnect?.clear();desktopConnect?.direct?.clear();follow.close();clearInterval(leaseTimer);await codexDesktop?.close();for(const client of clients.values()){client.abort?.abort();clearTimeout(client.timer);if(client.run?.sessionId&&BUSY.has(client.run?.status))void adapter.interrupt?.(client.run?.sessionId).catch(()=>{});client.active=false;}const active=[...hubs.values()].map(retireHub);hubs.clear();await Promise.all([...active,...cleanups]);workBuddy?.close();await adapter.close?.();for(const res of streams)res.end();if(server.listening){const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}}
+  async function close(){if(closed)return;closed=true;desktopConnect?.clear();desktopConnect?.direct?.clear();follow.close();clearInterval(leaseTimer);await codexDesktop?.close();await qwenDesktop?.close();for(const client of clients.values()){disconnected(client,'service_stopped');client.abort?.abort();clearTimeout(client.timer);if(client.run?.sessionId&&BUSY.has(client.run?.status))void adapter.interrupt?.(client.run?.sessionId).catch(()=>{});client.active=false;}const active=[...hubs.values()].map(retireHub);hubs.clear();await Promise.all([...active,...cleanups]);workBuddy?.close();await adapter.close?.();for(const res of streams)res.end();if(server.listening){const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}}
   return {server,close,instanceId};
 }

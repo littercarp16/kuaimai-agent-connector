@@ -4,3 +4,22 @@ test('/new真实创建并绑定，只创建一次且不发送prompt',async t=>{c
 test('观察授权不能创建新会话，文件搜索必须属于绑定会话',async t=>{const f=await setup(t,{control:false});assert.equal((await f.req('/v1/session/new',{sessionId:'ses_seed',requestId:crypto.randomUUID()},f.token)).status,403);assert.equal((await f.req('/v1/files/search',{sessionId:'ses_seed',query:'readme'},f.token)).status,200);assert.equal((await f.req('/v1/files/search',{sessionId:'ses_other',query:'readme'},f.token)).status,409);});
 test('创建在途时解绑，迟到结果不能重新激活或发送任务',async t=>{const f=await setup(t);let release,started=false;f.adapter.createSharedSession=()=>{started=true;return new Promise(r=>{release=r;});};const pending=f.req('/v1/session/new',{sessionId:'ses_seed',requestId:crypto.randomUUID()},f.token),end=Date.now()+2000;while(!started&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.equal(started,true);await f.req('/v1/unbind',{},f.token);release({id:'ses_new',title:'迟到新会话'});assert.equal((await pending).status,409);assert.equal(f.calls.some(x=>x[0]==='send'),false);});
 test('附件真实传给适配器，附件内容改变的同ID请求不去重成旧消息',async t=>{const f=await setup(t),requestId=crypto.randomUUID(),input={sessionId:'ses_seed',requestId,text:'读取附件',uploads:[{name:'附件.txt',mime:'text/plain',base64:Buffer.from('测试').toString('base64')}]};assert.equal((await f.req('/v1/run',input,f.token)).status,202);assert.equal(f.calls.find(x=>x[0]==='send')[1].options.uploads[0].name,'附件.txt');const changed={...input,uploads:[{...input.uploads[0],base64:'eA=='}]};assert.equal((await f.req('/v1/run',changed,f.token)).status,409);});
+
+test('page context is origin-bound, capability-gated and part of deduplication without entering message history', async t => {
+  const f = await setup(t);
+  const pageContext = { appId: '925', pageId: '7', pageName: '页面', draftVersionNo: 2, webOrigin: 'http://127.0.0.1:4173' };
+  const input = { sessionId: 'ses_seed', requestId: crypto.randomUUID(), text: '请解释页面', pageContext };
+  assert.equal((await f.req('/v1/run', input, f.token)).status, 409);
+  assert.equal(f.calls.filter(x => x[0] === 'send').length, 0);
+  f.adapter.capabilities = { pageContext: true };
+  for (const invalid of [{ ...pageContext, webOrigin: 'https://other.example' }, { ...pageContext, instructions: 'bypass checks' }, { ...pageContext, pageId: 7 }, { ...pageContext, draftVersionNo: -1 }]) {
+    assert.equal((await f.req('/v1/run', { ...input, pageContext: invalid }, f.token)).status, 400);
+  }
+  assert.equal((await f.req('/v1/run', input, f.token)).status, 202);
+  assert.equal((await f.req('/v1/run', input, f.token)).status, 202);
+  const send = f.calls.filter(x => x[0] === 'send');
+  assert.equal(send.length, 1);
+  assert.equal(send[0][1].text, input.text);
+  assert.deepEqual(send[0][1].options.pageContext, pageContext);
+  assert.equal((await f.req('/v1/run', { ...input, pageContext: { ...pageContext, pageId: '8' } }, f.token)).status, 409);
+});

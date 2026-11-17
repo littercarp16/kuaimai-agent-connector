@@ -3,7 +3,7 @@
 (() => {
   const ports = Array.from({ length: 32 }, (_, i) => 17653 + i);
   const endpointKey = 'km-agent.code.endpoint', grantKey = 'km-agent.code.direct-grant', pendingKey = 'km-agent.code.pending';
-  const paths = new Set(['/v1/health','/v1/snapshot','/v1/events','/v1/run','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/codex/desktop/restart']);
+  const paths = new Set(['/v1/health','/v1/snapshot','/v1/events','/v1/run','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/qwen/desktop','/v1/codex/desktop/restart','/v1/qwen/desktop/ensure']);
   const code = /^[\w-]{43}$/;
   const read = (storage, key) => { try { return JSON.parse(storage.getItem(key)); } catch { return null; } };
   const random = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -158,11 +158,12 @@
       pending = work.finally(() => { if (pending === tracked) pending = null; }); const tracked = pending;
       pending.catch(() => {}); return pending;
     }
-    function prepare({ onRequest = () => {} } = {}) {
+    function prepare({ onRequest = () => {}, provider } = {}) {
+      if (provider !== undefined && !['codex', 'qwen'].includes(provider)) throw Error('不支持的 Agent');
       controller?.abort(); session?.detach(); session = null; controller = new AbortController();
       const value = { state:random(), verifier:random(), created:Date.now() }, origin = location.origin;
       const url = 'km-agent://connect?' + new URLSearchParams({ origin, callback:origin+'/agent/connect-callback.html', state:value.state,
-        challenge:globalThis.KmDesktopConnector.challengeFor(value.verifier), browser:'default', transport:'direct' });
+        challenge:globalThis.KmDesktopConnector.challengeFor(value.verifier), browser:'default', transport:'direct', ...(provider ? { provider } : {}) });
       const request = btoa(JSON.stringify({url,created:value.created})).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
       onRequest(request); sessionStorage.setItem(pendingKey,JSON.stringify(value));
       return { request, connection:track(waitForGrant(value,controller.signal)) };

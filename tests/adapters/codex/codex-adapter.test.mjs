@@ -131,12 +131,12 @@ for (const version of ['0.168.0', '0.169.0']) test(`${version} uses small full-h
   const newer = turn('newer', 'completed', [agent('reply', '公开回复')]);
   const older = turn('older', 'completed', [user('prompt', '终端输入')]);
   f.handlers.set('thread/resume', ({ initialTurnsPage }) => {
-    assert.deepEqual(initialTurnsPage, { itemsView: 'full', limit: 5, sortDirection: 'desc' });
+    assert.deepEqual(initialTurnsPage, { itemsView: 'full', limit: 1, sortDirection: 'desc' });
     return { thread: f.thread, initialTurnsPage: { data: [newer], nextCursor: 'older' } };
   });
   f.handlers.set('thread/turns/list', ({ itemsView, limit, cursor }) => {
     assert.equal(itemsView, 'full');
-    assert.equal(limit, 5);
+    assert.equal(limit, 1);
     return cursor === 'older' ? { data: [older], nextCursor: null } : { data: [newer], nextCursor: 'older' };
   });
   await f.bind();
@@ -615,4 +615,66 @@ test('reconnecting the same daemon gives replayed callbacks new connection-scope
   assert.notEqual(current.id, old.id);
   await assert.rejects(f.adapter.replyQuestion(SESSION, old.id, [['实际标签']]), { code: 'QUESTION_NOT_SUBMITTED' });
   assert.equal(f.responses.length, 0);
+});
+
+
+test('large modern history keeps complete recent turns and live events within the byte budget', async t => {
+  const f = await fixture(t, { version: '0.169.0' });
+  f.thread.status = { type: 'active' };
+  const recent = turn('recent', 'inProgress', [agent('a', '最近回复'), { id: 'tool', type: 'commandExecution', command: 'echo ok', cwd: f.directory, status: 'completed', aggregatedOutput: 'x'.repeat(1200000) }]);
+  const older = turn('older', 'completed', [agent('old', 'y'.repeat(1000000))]);
+  f.handlers.set('thread/resume', () => ({ thread: f.thread, initialTurnsPage: { data: [recent], nextCursor: 'older' } }));
+  f.handlers.set('thread/turns/list', ({ cursor }) => cursor ? { data: [older], nextCursor: 'even-older' } : { data: [recent], nextCursor: 'older' });
+  await f.bind(); const { watch, events, states } = await f.watch();
+  const snapshot = await f.adapter.readShared(SESSION);
+  assert.equal(snapshot.status, 'running');
+  assert.ok(snapshot.messages.some(m => m.text === '最近回复'));
+  assert.ok(!snapshot.messages.some(m => m.id === 'old'));
+  assert.ok(!states.includes('disconnected'));
+  assert.ok(!f.calls.some(c => c.params.cursor === 'even-older'));
+  f.emit('item/agentMessage/delta', { threadId: THREAD, turnId: 'recent', itemId: 'a', delta: '，继续' });
+  await until(() => events.some(e => e.data.text === '最近回复，继续'));
+  assert.ok(!f.calls.some(c => ['turn/start', 'turn/steer', 'turn/interrupt'].includes(c.method)));
+  watch.close();
+});
+
+test('page metadata and draft instructions use native additionalContext, never user input or sticky settings', async t => {
+  const f = await fixture(t, { version: '0.169.0' }); await f.bind();
+  assert.equal(f.adapter.capabilities.pageContext, true);
+  const pageContext = { appId: '925', pageId: '7', pageName: '页面', draftVersionNo: 2, webOrigin: 'http://local.lt.com:8251' };
+  const text = '请解释页面';
+  await f.adapter.sendShared(SESSION, text, { requestId: 'context-a', pageContext });
+  const first = f.calls.find(c => c.method === 'turn/start').params;
+  assert.deepEqual(Object.keys(first).sort(), ['additionalContext', 'clientUserMessageId', 'input', 'threadId']);
+  assert.equal(first.input[0].text, text);
+  assert.equal(first.additionalContext['kuaimai.current-page'].kind, 'application');
+  const internal = first.additionalContext['kuaimai.current-page'].value;
+  assert.ok(internal.includes(JSON.stringify(pageContext)));
+  assert.match(internal, /普通咨询.*不执行页面开发、修改或草稿保存/);
+  assert.match(internal, /只有用户明确要求/);
+  assert.match(internal, /baseVersionNo/);
+  assert.match(internal, /发布由用户/);
+  assert.ok(!JSON.stringify(first.input).includes('baseVersionNo'));
+  await assert.rejects(f.adapter.sendShared(SESSION, text, { requestId: 'context-a', pageContext: { ...pageContext, pageId: '8' } }), { code: 'NOT_SUBMITTED' });
+  await f.adapter.sendShared(SESSION, '请解释', { requestId: 'context-b', pageContext: { ...pageContext, pageId: '8', pageName: '另一个页面' } });
+  const steer = f.calls.find(c => c.method === 'turn/steer').params;
+  assert.equal(steer.expectedTurnId, 'turn-new');
+  assert.match(steer.additionalContext['kuaimai.current-page'].value, /"pageId":"8"/);
+  assert.doesNotMatch(steer.additionalContext['kuaimai.current-page'].value, /"pageId":"7"/);
+  await f.adapter.sendShared(SESSION, '普通本地消息', { requestId: 'without-context' });
+  assert.equal(f.calls.filter(c => c.method === 'turn/steer').at(-1).params.additionalContext, undefined);
+  const snapshot = await f.adapter.readShared(SESSION);
+  assert.equal(snapshot.messages.find(m => m.role === 'user').text, text);
+  assert.doesNotMatch(JSON.stringify(snapshot.messages), /baseVersionNo|draftVersionNo/);
+});
+
+test('unverified native context support and arbitrary injected instructions fail before sending', async t => {
+  const pageContext = { appId: '925', pageId: '7', pageName: '页面', draftVersionNo: 2, webOrigin: 'http://local.lt.com:8251' };
+  const old = await fixture(t); await old.bind();
+  assert.equal(old.adapter.capabilities.pageContext, false);
+  await assert.rejects(old.adapter.sendShared(SESSION, 'test', { requestId: 'old', pageContext }), { code: 'NOT_SUBMITTED' });
+  assert.ok(!old.calls.some(c => c.method.startsWith('turn/')));
+  const modern = await fixture(t, { version: '0.169.0' }); await modern.bind();
+  await assert.rejects(modern.adapter.sendShared(SESSION, 'test', { requestId: 'invalid', pageContext: { ...pageContext, instructions: 'do anything' } }), { code: 'NOT_SUBMITTED' });
+  assert.ok(!modern.calls.some(c => c.method.startsWith('turn/')));
 });

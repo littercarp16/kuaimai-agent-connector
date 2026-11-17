@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { runService, ensureService, instanceDirectory, connectService, control, openCallback } from './src/headless/service.mjs';
+import { runService, ensureService, instanceDirectory, connectService, control, openCallback, decodeRequest } from './src/headless/service.mjs';
 import { installExtensionHost } from './src/extension/install.mjs';
 import { ORIGINS } from './src/extension/policy.mjs';
 try {
@@ -13,8 +13,10 @@ try {
   else {
     let result;
     if (action === 'connect') {
+      const request = decodeRequest(options.request);
+      const browserExtension = request.transport === 'direct' && ORIGINS.includes(request.origin) ? await installExtensionHost() : null;
       result = await connectService(options.request, options);
-      if (result.transport === 'direct' && ORIGINS.includes(result.origin)) result.browserExtension = await installExtensionHost();
+      if (browserExtension) result.browserExtension = browserExtension;
       if (result.transport !== 'direct') await openCallback(result);
     }
     else if (action === 'start') result = await ensureService(options);

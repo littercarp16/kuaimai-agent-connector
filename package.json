@@ -1,6 +1,6 @@
 {
   "name": "kuaimai-agent-connector",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Local Agent bridge for Kuaimai and Lingtong, with background Codex sessions and browser connections",
   "license": "UNLICENSED",
   "repository": { "type": "git", "url": "git+https://github.com/littercarp16/kuaimai-agent-connector.git" },

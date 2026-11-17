@@ -1,0 +1,26 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {once} from 'node:events';
+import {randomUUID} from 'node:crypto';
+import {createConnector} from '../../src/http/server.mjs';
+import {createQwenDesktopManager} from '../../src/runtime/qwen-desktop.mjs';
+test('Qwen ensure requires authenticated exact origin, instance and fixed schema; Codex browsing has no Qwen OS side effects',async t=>{
+ const origin='http://127.0.0.1:4173',calls=[];
+ const manager=createQwenDesktopManager({runtime:{check:async()=>{},inspect:async()=>({available:true,authenticated:true}),isRunning:async()=>true,quit:async()=>calls.push('quit'),open:async()=>calls.push('open')}});
+ const adapter={descriptor:{id:'codex'},health:async()=>({ready:true}),listSessions:async()=>[]};
+ const c=createConnector({adapter,qwenDesktop:manager,allowedOrigins:[origin],autoTrust:{origin}});
+ c.server.listen(0,'127.0.0.1');await once(c.server,'listening');t.after(()=>c.close());
+ const url=`http://127.0.0.1:${c.server.address().port}`;let token;
+ const web=async(path,body,extra={})=>{const r=await fetch(url+path,{method:body===undefined?'GET':'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Km-Agent':'1',...(token?{Authorization:'Bearer '+token}:{}),...extra},body:body===undefined?undefined:JSON.stringify(body)});return{status:r.status,...await r.json()};};
+ const input=()=>({instanceId:c.instanceId,requestId:randomUUID()});
+ assert.equal((await web('/v1/qwen/desktop/ensure',input())).status,401);
+ token=(await web('/v1/handshake',{})).data.token;
+ await web('/v1/sources');assert.equal(manager.status().state,'idle');assert.deepEqual(calls,[]);
+ assert.equal((await web('/v1/qwen/desktop/ensure',input(),{Origin:'https://evil.example'})).status,403);
+ assert.equal((await web('/v1/qwen/desktop/ensure',{...input(),instanceId:'stale'})).status,409);
+ assert.equal((await web('/v1/qwen/desktop/ensure',{...input(),command:'anything'})).status,400);
+ assert.equal((await web('/v1/qwen/desktop/ensure',{instanceId:c.instanceId})).status,400);
+ const body=input(),accepted=await web('/v1/qwen/desktop/ensure',body);assert.equal(accepted.status,202);
+ while(manager.status().state==='running')await new Promise(r=>setTimeout(r,10));
+ assert.equal((await web('/v1/qwen/desktop')).data.state,'completed');assert.equal((await web('/v1/qwen/desktop/ensure',body)).data.id,accepted.data.id);assert.deepEqual(calls,[]);
+});

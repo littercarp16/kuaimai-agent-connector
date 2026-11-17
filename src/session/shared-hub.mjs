@@ -34,11 +34,11 @@ export function createSharedHub({adapter,session,onChange,instructionKey,instruc
   async function start(){await connect();if(!closed&&adapter.installBridge){installation=Promise.resolve(adapter.installBridge(session.id,instructionKey,instruction));await installation;}}
   async function submit(owner,input,{assertCurrent=()=>{}}={}){
     const mine=epoch,check=()=>{assertCurrent();if(closed||transport!=='connected'||epoch!==mine||!members.has(owner))throw Error('需求所属原生连接或授权已变化');};check();
-    const signature=createHash('sha256').update(JSON.stringify({text:input.text,uploads:input.uploads||[],references:input.references||[]})).digest('hex'),previous=requests.get(input.requestId);
+    const signature=createHash('sha256').update(JSON.stringify({text:input.text,pageContext:input.pageContext||null,uploads:input.uploads||[],references:input.references||[]})).digest('hex'),previous=requests.get(input.requestId);
     if(previous){if(previous.signature!==signature)throw Error('相同请求ID不能用于不同需求');return previous.promise;}
     const controller=new AbortController(),record={signature,controller,owner,promise:null};
     record.promise=(async()=>{try{
-      const receipt=await adapter.sendShared(session.id,input.text,{requestId:input.requestId,signal:controller.signal,assertCurrent:check,uploads:input.uploads||[],references:input.references||[]});check();
+      const receipt=await adapter.sendShared(session.id,input.text,{requestId:input.requestId,signal:controller.signal,assertCurrent:check,...(input.pageContext?{pageContext:input.pageContext}:{}),uploads:input.uploads||[],references:input.references||[]});check();
       const confirmation=receipt.accepted===true&&receipt.delivery==='accepted'?{accepted:true,delivery:'accepted',...(receipt.nativeEcho===true?{clientMessageId:receipt.id,nativeTurnId:receipt.nativeTurnId}:{})}:{};
       if(closed)return {runId:projection.value.id,messageId:receipt.id,...confirmation};
       // An acknowledgment can carry a correlation ID distinct from the native

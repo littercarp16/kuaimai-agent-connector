@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { mkdir, lstat, chmod, unlink, open, realpath } from 'node:fs/promises';
+import { mkdir, lstat, chmod, unlink, realpath } from 'node:fs/promises';
 import { join, resolve, parse } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -12,8 +12,9 @@ import { createCodexDesktopManager } from '../runtime/codex-desktop.mjs';
 import { parseConnectURL } from '../desktop/connect-grants.mjs';
 import { validWebOrigin } from '../runtime/web-origin.mjs';
 import { claimService } from '../runtime/service-instance.mjs';
+import { createFileLogger } from '../runtime/logger.mjs';
 
-export const VERSION = '0.3.3';
+export const VERSION = '0.4.0';
 export const dataRoot = () => join(homedir(), '.kuaimai-agent', 'code');
 export function instanceDirectory(origin, root = dataRoot()) {
   if (!validWebOrigin(origin)) throw Error('无效的网页来源');
@@ -50,47 +51,67 @@ export async function control(directory, request) {
     socket.on('end', () => { try { const value = JSON.parse(bytes); if (!value.ok) throw Error(value.error); resolve(value.data); } catch (error) { reject(error); } });
   });
 }
-export async function runService({ origin, directory, port = 17653 }) {
+export async function runService({ origin, directory, port = 17653, qwenDesktopFactory }) {
   process.title = 'kuaimai-agent-connector';
-  await privateDirectory(directory);
+  directory = await privateDirectory(directory);
+  const logger = createFileLogger({ path: join(directory, 'service.log') });
   const socketPath = join(directory, 'control.sock');
-  if (Buffer.byteLength(socketPath) > 100) throw Error('后台运行目录路径过长');
-  const host = createDesktopHost({ directory, preferredPort: port, reconnect: true, direct: true,
+  const host = createDesktopHost({ directory, preferredPort: port, reconnect: true, direct: true, logger, qwenDesktopFactory,
     // Code mode never installs either the bridge or Codex login task.
     desktopFactory: () => createCodexDesktopManager(),
   });
-  const publicStatus = () => { const { endpoint, instanceId, state } = host.status(); return { version: VERSION, endpoint, instanceId, state, origin, pid: process.pid, loginStartup: false }; };
-  await host.start({ origins: [origin] });
-  // The host lease was acquired first, so only its owner may replace a stale socket.
-  try { const old = await lstat(socketPath); if (!old.isSocket() || old.uid !== process.getuid()) throw Error('已有控制路径无法替换'); await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') { await host.stop(); throw error; } }
-  let closing = false;
-  const server = net.createServer({ allowHalfOpen: true }, socket => {
-    let bytes = '';
-    socket.setTimeout(10000, () => socket.destroy());
-    socket.on('error', () => {});
-    socket.on('data', data => { bytes += data; if (bytes.length > 16000) socket.destroy(); });
-    socket.on('end', async () => {
-      try {
-        const request = JSON.parse(bytes); let data;
-        if (request.action === 'status') data = publicStatus();
-        else if (request.action === 'connect') {
-          const parsed = decodeRequest(request.request);
-          if (parsed.origin !== origin) throw Error('连接请求不属于当前网页');
-          const pending = host.inspectLink(parsed.url); data = { ...host.authorize(pending.id), ...publicStatus() };
-        } else if (request.action === 'stop') { data = { stopped: true }; setTimeout(() => void stop(), 50); }
-        else throw Error('不支持的本机操作');
-        socket.end(JSON.stringify({ ok: true, data }));
-      } catch (error) { socket.end(JSON.stringify({ ok: false, error: String(error.message).slice(0, 240) })); }
-    });
-  });
+  const publicStatus = () => { const { endpoint, instanceId, state } = host.status(); return { version: VERSION, endpoint, instanceId, state, origin, pid: process.pid, loginStartup: false, qwenDesktopPreparation: true, logging: logger.status() }; };
+  const fatal = error => logger.error('process.uncaught_exception', { instanceId: host.status().instanceId, error });
+  process.on('uncaughtExceptionMonitor', fatal);
+  let server, closing = false, ownsControlSocket = false;
+  const signals = new Map(['SIGINT','SIGTERM'].map(signal => [signal, () => { logger.info('service.signal', { signal }); void stop().catch(() => { process.exitCode = 1; }); }]));
   async function stop() {
     if (closing) return; closing = true;
-    server.close(); await host.stop(); await unlink(socketPath).catch(() => {});
+    try {
+      server?.close(); await host.stop(); if (ownsControlSocket) await unlink(socketPath).catch(() => {});
+    } finally {
+      for (const [signal, handler] of signals) process.removeListener(signal, handler);
+      process.removeListener('uncaughtExceptionMonitor', fatal); logger.close();
+    }
   }
-  try { await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); }); await chmod(socketPath, 0o600); }
-  catch (error) { await stop(); throw error; }
-  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => void stop());
-  return { status: publicStatus, stop };
+  try {
+    if (Buffer.byteLength(socketPath) > 100) throw Error('后台运行目录路径过长');
+    await host.start({ origins: [origin] });
+    // The host lease was acquired first, so only its owner may replace a stale socket.
+    try { const old = await lstat(socketPath); if (!old.isSocket() || old.uid !== process.getuid()) throw Error('已有控制路径无法替换'); await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    server = net.createServer({ allowHalfOpen: true }, socket => {
+      let bytes = '';
+      socket.setTimeout(10000, () => { logger.warn('control.timeout'); socket.destroy(); });
+      socket.on('error', error => logger.warn('control.socket_error', { error }));
+      socket.on('data', data => { bytes += data; if (bytes.length > 16000) { logger.warn('control.rejected', { reason: 'request_too_large' }); socket.destroy(); } });
+      socket.on('end', async () => {
+        const started = performance.now(); let action = 'unknown';
+        try {
+          const request = JSON.parse(bytes); let data;
+          if (['status','connect','stop'].includes(request.action)) action = request.action;
+          if (action === 'status') data = publicStatus();
+          else if (action === 'connect') {
+            const parsed = decodeRequest(request.request);
+            if (parsed.origin !== origin) throw Error('连接请求不属于当前网页');
+            const pending = host.inspectLink(parsed.url); data = { ...host.authorize(pending.id), ...publicStatus() };
+            if (parsed.provider === 'qwen') data.preparation = host.prepareQwen();
+            logger.info('web.authorized', { origin, instanceId: data.instanceId });
+          } else if (action === 'stop') { data = { stopped: true }; setTimeout(() => void stop().catch(() => { process.exitCode = 1; }), 50); }
+          else throw Error('不支持的本机操作');
+          logger.info('control.request', { action, durationMs: Math.round((performance.now() - started) * 100) / 100, outcome: 'completed' });
+          socket.end(JSON.stringify({ ok: true, data }));
+        } catch (error) {
+          logger.warn('control.request', { action, durationMs: Math.round((performance.now() - started) * 100) / 100, outcome: 'rejected', error });
+          socket.end(JSON.stringify({ ok: false, error: String(error.message).slice(0, 240) }));
+        }
+      });
+    });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+    ownsControlSocket = true;
+    await chmod(socketPath, 0o600);
+    for (const [signal, handler] of signals) process.once(signal, handler);
+    return { status: publicStatus, stop };
+  } catch (error) { logger.error('service.start_failed', { error }); await stop(); throw error; }
 }
 export async function ensureService({ origin, directory = instanceDirectory(origin), port = 17653 }) {
   directory = await privateDirectory(directory);
@@ -98,25 +119,36 @@ export async function ensureService({ origin, directory = instanceDirectory(orig
     try { const status = await control(directory, { action: 'status' }); if (status.origin !== origin) throw Error('已有连接器来源不匹配'); return status; }
     catch (error) { if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) return null; throw error; }
   };
-  const existing = await check(); if (existing?.version === VERSION) return { ...existing, reused: true };
+  const existing = await check(); if (existing?.version === VERSION && existing.qwenDesktopPreparation === true) return { ...existing, reused: true };
   let release;
   try { release = await claimService(join(directory, 'startup'), origin); }
-  catch { for (let i = 0; i < 100; i++) { await delay(100); const ready = await check(); if (ready?.version === VERSION) return { ...ready, reused: true }; } throw Error('后台启动未获确认，请检查服务日志'); }
+  catch { for (let i = 0; i < 100; i++) { await delay(100); const ready = await check(); if (ready?.version === VERSION && ready.qwenDesktopPreparation === true) return { ...ready, reused: true }; } throw Error('后台启动未获确认，请检查服务日志'); }
   try {
-    const raced = await check(); if (raced?.version === VERSION) return { ...raced, reused: true };
+    const raced = await check(); if (raced?.version === VERSION && raced.qwenDesktopPreparation === true) return { ...raced, reused: true };
     if (raced) {
       // This is the owned per-origin control socket, never an arbitrary TCP
       // process or the native Agent. Upgrade only older known release versions.
-      if (!/^\d+\.\d+\.\d+$/.test(raced.version || '') || raced.version.localeCompare(VERSION, undefined, { numeric: true }) >= 0) throw Error('已有连接器版本更新，请使用匹配的 npm 版本');
+      if (!/^\d+\.\d+\.\d+$/.test(raced.version || '') || raced.version.localeCompare(VERSION, undefined, { numeric: true }) > 0) throw Error('已有连接器版本更新，请使用匹配的 npm 版本');
       await control(directory, { action: 'stop' });
       for (let i = 0; i < 100 && await check(); i++) await delay(100);
       if (await check()) throw Error('旧连接器尚未退出，请稍后重试');
     }
-    const log = await open(join(directory, 'service.log'), 'a', 0o600);
     const entry = fileURLToPath(new URL('../../headless.mjs', import.meta.url));
-    const child = spawn(process.execPath, [entry, 'serve', '--origin', origin, '--directory', directory, '--port', String(port)], { detached: true, stdio: ['ignore', log.fd, log.fd], cwd: await realpath(fileURLToPath(new URL('../../', import.meta.url))) });
-    try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref(); } finally { await log.close(); }
-    for (let i = 0; i < 100; i++) { await delay(100); const ready = await check(); if (ready) return { ...ready, reused: false }; }
+    const launchLog = createFileLogger({ path: join(directory, 'service.log') });
+    launchLog.info('service.launching', { origin, preferredPort: port }); launchLog.close();
+    // The child writes structured logs itself. Raw stderr can contain prompts
+    // or credentials and must not bypass rotation or the log field allowlist.
+    const child = spawn(process.execPath, [entry, 'serve', '--origin', origin, '--directory', directory, '--port', String(port)], { detached: true, stdio: 'ignore', cwd: await realpath(fileURLToPath(new URL('../../', import.meta.url))) });
+    const failed = error => {
+      const log = createFileLogger({ path: join(directory, 'service.log') });
+      log.error('service.launch_failed', { error, exitCode: child.exitCode, signal: child.signalCode }); log.close();
+    };
+    try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref(); }
+    catch (error) { failed(error); throw error; }
+    for (let i = 0; i < 100; i++) {
+      await delay(100); const ready = await check(); if (ready) return { ...ready, reused: false };
+      if (child.exitCode !== null || child.signalCode !== null) { failed(); throw Error('后台启动失败，请检查服务日志'); }
+    }
     throw Error('后台启动未获确认，请检查服务日志；不会重复启动');
   } finally { await release(); }
 }

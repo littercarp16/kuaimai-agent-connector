@@ -140,7 +140,11 @@ KM_FOLLOW_LIVE=1 node --test agent/follow-live.browser.test.mjs
 
 ## 千问办公桌面会话（macOS）
 
-已验证 QwenWorkCN 2.0.2。先退出千问办公，再用以下命令启动已安装的桌面客户端。
+已验证 QwenWorkCN 2.0.2。代码版网页连接请求携带 `provider=qwen` 时，已独立运行的后台桥接会自动准备千问本机 HTTP 接口；复用已有桥接也执行检测。网页使用已授权连接选择千问时，通过 `/v1/qwen/desktop/ensure` 触发相同准备流程，GET `/v1/qwen/desktop` 读取进度。
+
+接口正常则复用；千问未运行则直接启动；已运行但接口不可用则正常退出，等待进程完全结束后携带环境变量启动。退出失败或超时不强杀。准备操作串行合并，重试使用请求 ID 去重；千问登录状态独立校验。已成功退出后，即使发起网页离开也完成恢复启动。未指定千问的请求及 Codex 连接不触发千问重启。
+
+本次启动使用以下命令，不写入 `.env`、不增加 Skill 或 Hook，不修改模型或审批设置。连接准备文案明确提示必要时重启及任务中断影响；已配置 `.env` 显式关闭接口时，该配置优先于启动环境，准备超时会提示检查。
 
 ```sh
 open -a /Applications/QwenWorkCN.app --env QWENWORK_DESKTOP_CONTROL_ENABLED=1

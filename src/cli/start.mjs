@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, open, realpath, stat, lstat } from 'node:fs/promises';
+import { mkdir, realpath, stat, lstat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseLaunchOptions } from '../runtime/launch-options.mjs';
@@ -28,10 +28,9 @@ try {
     await delay(100); existing = await serviceLease(runtimePath, profile);
   }
   if (!existing) {
-    const log = await open(directory + stem + '.log', 'a', 0o600);
-    const child = spawn(process.execPath, [root + 'main.mjs', ...args], { detached: true, stdio: ['ignore', log.fd, log.fd], cwd: root });
+    const child = spawn(process.execPath, [root + 'main.mjs', ...args], { detached: true, stdio: 'ignore', cwd: root });
     const spawned = new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-    try { await spawned; child.unref(); } finally { await log.close(); }
+    await spawned; child.unref();
   }
   const deadline = Date.now() + 10000;
   let ready;
