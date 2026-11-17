@@ -7,7 +7,7 @@
 在绫通快麦多维表格网页选择 ChatGPT / Codex，点击“复制连接请求”，交给本地 Agent 执行：
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 connect --request '<网页自动生成的请求>'
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.3 connect --request '<网页自动生成的请求>'
 ```
 
 命令安装或复用当前用户目录中的固定版本，启动独立后台进程，并将实际端口返回原网页。无需选择项目目录、填写端口或配对码。在原页面直接连接，无需弹窗、回调页或保留连接窗口；接入请求有效期 30 分钟。
@@ -22,11 +22,13 @@ npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 co
 ## 服务管理
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 status --origin https://app.ltpass.com
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 stop --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.3 status --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.3 stop --origin https://app.ltpass.com
 ```
 
 以实际网页来源替换示例。代码保存在 `~/.kuaimai-agent/code/npm/`，运行信息与日志位于 `~/.kuaimai-agent/code/instances/`。运行文件包含本机凭据，不应上传或公开。
+
+从 0.3.3 起，桥接服务进程名为 `kuaimai-agent-connector`，可在 macOS「活动监视器」中搜索该名称，并用 `status` 返回的 PID 区分不同网站的实例。已有旧版实例在执行新版连接请求时自动升级并重启，随后显示新名称。
 
 ## 开发
 

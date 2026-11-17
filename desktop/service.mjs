@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
 import { createDesktopHost } from '../src/desktop/host.mjs';
+process.title = 'kuaimai-agent-connector';
 const directory = process.env.KM_AGENT_APP_DATA_DIR || join(homedir(), 'Library', 'Application Support', 'Kuaimai Agent Connector');
 if (!isAbsolute(directory)) throw Error('App data directory must be absolute');
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');

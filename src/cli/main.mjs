@@ -12,6 +12,7 @@ import { createCodexDockManager } from '../runtime/codex-desktop-dock.mjs';
 import { loadBootstrapConfig } from '../../skills/km-agent-bridge/scripts/prepare.mjs';
 import{homedir}from'node:os';import{join}from'node:path';
 
+process.title = 'kuaimai-agent-connector';
 const pairCode=String(randomInt(100000,1000000));
 if(process.argv.includes('--help')){console.log('node main.mjs [--adapter opencode|generic] [--session ses_...] [--trust-origin http://127.0.0.1:4173 | --origin https://your-app.example] [--allow-origin https://another-app.example] [--workspace /绝对工作目录] [--allow-control] [--pin-session]\n无会话受信入口仅观察；新任务默认自动查看，不停止旧任务或继承控制授权。generic只发布UI。');process.exit(0);}
 async function launchArguments(args) {

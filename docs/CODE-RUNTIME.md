@@ -1,12 +1,12 @@
-# npm 后台运行版（0.3.2）
+# npm 后台运行版（0.3.3）
 
 当前支持 macOS 与 Node.js 22+。网页复制请求，让本地 Agent 从 npm 官方源安装并后台启动。不需要 `.app`、登录启动项、项目目录、手动端口或配对码。
 
 ## 原页面连接流程
 
 1. 网页生成 state 和 PKCE verifier，只把 challenge 与精确网站来源放进复制请求。verifier 留在当前标签页。
-2. Agent 执行 `npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.2 connect --request '…'`。
-3. CLI 安装固定版本到 `~/.kuaimai-agent/code/npm/0.3.2/`，忽略安装脚本。服务从持久目录独立运行，不依赖 npx 缓存。
+2. Agent 执行 `npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.3.3 connect --request '…'`。
+3. CLI 安装固定版本到 `~/.kuaimai-agent/code/npm/0.3.3/`，忽略安装脚本。服务从持久目录独立运行，不依赖 npx 缓存。
 4. 同来源、同版本复用；升级时只停止经私有控制 socket 验证的旧连接器，不终止端口占用者或 Codex。
 5. 服务优先监听 17653，被占用则在 17653–17684 中选择可用端口；全部占用时明确报错。网页只向该范围和曾经保存的 loopback 端点请求无凭据的发现接口，不扫描任意端口。
 6. Agent 通过私有 IPC 登记短期 challenge。不会运行 `open`、打开 URL Scheme 或浏览器回调。原页面发现服务后用 verifier 单次领取当前实例的授权。

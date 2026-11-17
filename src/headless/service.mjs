@@ -13,7 +13,7 @@ import { parseConnectURL } from '../desktop/connect-grants.mjs';
 import { validWebOrigin } from '../runtime/web-origin.mjs';
 import { claimService } from '../runtime/service-instance.mjs';
 
-export const VERSION = '0.3.2';
+export const VERSION = '0.3.3';
 export const dataRoot = () => join(homedir(), '.kuaimai-agent', 'code');
 export function instanceDirectory(origin, root = dataRoot()) {
   if (!validWebOrigin(origin)) throw Error('无效的网页来源');
@@ -51,6 +51,7 @@ export async function control(directory, request) {
   });
 }
 export async function runService({ origin, directory, port = 17653 }) {
+  process.title = 'kuaimai-agent-connector';
   await privateDirectory(directory);
   const socketPath = join(directory, 'control.sock');
   if (Buffer.byteLength(socketPath) > 100) throw Error('后台运行目录路径过长');
