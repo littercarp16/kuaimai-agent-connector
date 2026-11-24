@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { realpath, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { discoverCodexDaemon, connectCodexRpc, isSupportedCodexVersion } from './codex-rpc.mjs';
+import { discoverCodexDaemon, connectCodexRpc } from './codex-rpc.mjs';
+import { probeCodexProtocol } from './codex-protocol.mjs';
 import { createCodexState, publicText, nativeKey } from './codex-state.mjs';
 import { publicQuestion, questionAnswer, publicApproval } from '../../session/shared-state.mjs';
 import { detailPolicy } from '../../tools/tool-details.mjs';
@@ -27,14 +28,14 @@ const meta = (thread, directory) => ({ id: 'ses_codex_' + thread.id.replaceAll('
   title: publicText(thread.name || thread.preview || '未命名会话').slice(0, 100), provider: 'codex', nativeThreadId: thread.id, directory });
 // Modern turns include complete tool outputs. Keep each page to one whole turn;
 // the bounded recent-history budget below stops before adding older pages.
-const historyPage = version => ({ itemsView: 'full', limit: ['0.168.0', '0.169.0'].includes(version) ? 1 : 20, sortDirection: 'desc' });
+const historyPage = () => ({ itemsView: 'full', limit: 1, sortDirection: 'desc' });
 function unwrap(id) {
   const match = typeof id === 'string' && WRAPPER.exec(id); if (!match) throw err('CODEX_SCOPE_CHANGED');
   const s = match[1]; return [s.slice(0, 8), s.slice(8, 12), s.slice(12, 16), s.slice(16, 20), s.slice(20)].join('-');
 }
 
 /** Connects to a running Codex shared daemon. */
-export function createCodexAdapter({ directory = process.cwd(), sessionScope = 'workspace', discover = discoverCodexDaemon, connect = connectCodexRpc,
+export function createCodexAdapter({ directory = process.cwd(), sessionScope = 'workspace', discover = discoverCodexDaemon, connect = connectCodexRpc, probe = probeCodexProtocol,
   now = Date.now, healthTtlMs = 2000, requestTimeoutMs = 5000, resolvedTimeoutMs = 5000,
   maxPages = 4, maxBytes = 2 * 1024 * 1024 } = {}) {
   if (!['workspace', 'agent'].includes(sessionScope)) throw Error('Unknown Codex session scope');
@@ -94,7 +95,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
       try {
         const discovered = await discover();
         if (closed) throw err();
-        if (!discovered?.ready || !isSupportedCodexVersion(discovered.version) ||
+        if (!discovered?.ready ||
           !path.isAbsolute(discovered.socketPath || '') || typeof discovered.instanceId !== 'string' || !discovered.instanceId) throw err();
         if (current && (current.instanceId !== discovered.instanceId || current.socketPath !== discovered.socketPath ||
           current.rpc.version !== discovered.version || current.rpc.closed)) invalidate();
@@ -103,17 +104,22 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           // A single tool-rich turn may exceed the generic 1 MiB RPC default.
           // Keep transport bounded; history and live buffers retain their own smaller budgets.
           const rpc = await connect({ socketPath: discovered.socketPath, version: discovered.version, maxBytes: 4 * 1024 * 1024 });
+          let protocol;
+          try { protocol = await probe(rpc, discovered); }
+          catch (error) { rpc.close(); throw error; }
           if (closed || openingEpoch !== epoch || rpc.closed || rpc.instanceId !== discovered.instanceId || rpc.version !== discovered.version) {
             rpc.close(); throw err();
           }
-          const capture = { rpc, epoch, sequence: 0, instanceId: discovered.instanceId, socketPath: discovered.socketPath };
+          const capture = { rpc, protocol, epoch, sequence: 0, instanceId: discovered.instanceId, socketPath: discovered.socketPath };
           current = capture;
           capture.unsubscribe = rpc.subscribe(event => route(capture, event));
           capture.offClose = rpc.onClose(() => { if (current === capture) invalidate(); });
         }
         value = { ready: true, version: discovered.version, message: 'Codex 共享本地服务可用；仅连接已有服务' };
-      } catch {
-        invalidate(); value = { ready: false, version: null, message: 'Codex 共享服务不可用或版本不兼容；不会自动启动' };
+      } catch (error) {
+        invalidate(); value = { ready: false, version: null, message: error?.code === 'CODEX_PROTOCOL_INCOMPATIBLE'
+          ? 'Codex 的初始化或会话列表协议不兼容，请更新连接器；未重启 Codex'
+          : 'Codex 共享服务不可用或协议验证失败；不会自动启动' };
       }
       healthCache = { at: now(), value }; return { ...value };
     })().finally(() => { healthFlight = null; });
@@ -267,7 +273,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     const snapshotItems = new Set((initial?.data || []).flatMap(turn => turn.itemsView && turn.itemsView !== 'full' ? [] :
       (turn.items || []).map(item => `${turn.id}\0${item.id}`)));
     const turns = await pages(capture, 'thread/turns/list', {
-      threadId: context.nativeId, ...historyPage(capture.rpc.version),
+      threadId: context.nativeId, ...historyPage(),
     }, context, signal, initial);
     check(capture, context);
     // Summary-only turns are incomplete, even if they include a nonempty item list.
@@ -288,7 +294,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     context.warmFlight = (async () => {
       await verify(context, signal); check(context.capture, context);
       const response = await request(context.capture, 'thread/resume', { threadId: context.nativeId, excludeTurns: true,
-        initialTurnsPage: historyPage(context.capture.rpc.version) }, context, signal);
+        initialTurnsPage: historyPage() }, context, signal);
       check(context.capture, context);
       const snapshotOrder = Array.isArray(response?.initialTurnsPage?.data) ? receiptOf(context.capture, response) : null;
       if (response?.thread?.id !== context.nativeId || !await inside(response.thread, context.capture, context.scope, context)) {
@@ -493,7 +499,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
       if (signal?.aborted || !Array.isArray(uploads) || !Array.isArray(references) || uploads.length || references.length ||
         typeof text !== 'string' || !text.trim() || text.length > 100000 || typeof requestId !== 'string' || !requestId || requestId.length > 200) throw err('NOT_SUBMITTED');
       const page = normalizePageContext(pageContext);
-      if (page && context.capture.rpc.version !== '0.169.0') throw err('NOT_SUBMITTED');
+      if (page && context.capture.protocol?.pageContext !== true) throw err('NOT_SUBMITTED');
       const additionalContext = codexPageContext(page);
       const signature = hash(JSON.stringify({ text, pageContext: page || null })), sendKey = JSON.stringify([id, requestId]), old = sends.get(sendKey);
       if (old) { if (old.signature !== signature) throw err('NOT_SUBMITTED'); return old.promise; }
@@ -604,7 +610,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
   }
   const capabilities = Object.freeze({ send: true, interrupt: true, questions: true, approvals: true, toolDetails: true,
     attachments: false, fileSearch: false, newSession: false, followSessions: false,
-    get pageContext() { return !closed && current?.rpc.version === '0.169.0'; } });
+    get pageContext() { return !closed && current?.protocol?.pageContext === true; } });
   return {
     descriptor: Object.freeze({ id: 'codex', status: 'native', capabilities }), capabilities,
     health, listSessions, bindSession, readShared, watch, sendShared, interruptShared, readToolDetail,

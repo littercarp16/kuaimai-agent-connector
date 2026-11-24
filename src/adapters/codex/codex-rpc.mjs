@@ -10,11 +10,8 @@ const execVersion = promisify(execFile);
 const VERSION_BYTES = 64 * 1024;
 const MAX_PENDING = 128;
 const MAX_SERVER_IDS = 4096;
-const supportedVersions = '0.166.x、0.167.2、0.168.0、0.169.0';
-export const isSupportedCodexVersion = version =>
-  typeof version === 'string' && (['0.167.2', '0.168.0', '0.169.0'].includes(version) || /^0\.166\.(0|[1-9]\d*)$/.test(version));
-const compatibleDaemonVersion = (cli, server) =>
-  isSupportedCodexVersion(server) && (cli === server || (cli === '0.167.2' && server === '0.168.0') || (cli === '0.168.0' && server === '0.169.0'));
+// Release numbers are diagnostic metadata, never a protocol compatibility gate.
+const reportedVersion = value => typeof value === 'string' && /^[\w.+-]{1,80}$/.test(value) ? value : null;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const has = (object, key) => Object.hasOwn(object, key);
 const validId = id => typeof id === 'string' || Number.isSafeInteger(id);
@@ -93,12 +90,12 @@ export async function discoverCodexDaemon({ run = execVersion, command = 'codex'
     return unready('Codex 命令不可用或未能读取服务状态');
   }
   if (!record(status) || status.status !== 'running') return unready('Codex 共享服务未运行，不会自动启动');
-  if (!compatibleDaemonVersion(status.cliVersion, status.appServerVersion)) {
-    return unready(`Codex CLI 与共享服务的版本组合未支持。同版本支持 ${supportedVersions}，另支持 0.167.2→0.168.0、0.168.0→0.169.0`);
-  }
   try {
     const socket = await inspectSocket(status.socketPath);
-    return { ready: true, version: status.appServerVersion, ...socket };
+    return { ready: true, version: reportedVersion(status.appServerVersion), ...socket,
+      // Optional schema discovery must use the daemon binary, not the CLI on PATH.
+      ...(typeof status.managedCodexPath === 'string' && status.managedCodexVersion === status.appServerVersion
+        ? { schemaBinary: status.managedCodexPath } : {}) };
   } catch {
     return unready('Codex 本地套接字不存在、所有权不符或目录权限不安全');
   }
@@ -131,8 +128,8 @@ function invokeSafely(fn, value) {
 }
 
 /** WebSocket HTTP Upgrade over an owned Unix socket; never stdio/JSONL or a new server. */
-export async function connectCodexRpc({ socketPath, version = '0.166.0', timeoutMs = 5000, maxBytes = 1024 * 1024 } = {}) {
-  if (!isSupportedCodexVersion(version)) throw safeError('CODEX_UNSUPPORTED_VERSION', `Codex 版本不受支持，支持 ${supportedVersions}`);
+export async function connectCodexRpc({ socketPath, version = null, timeoutMs = 5000, maxBytes = 1024 * 1024 } = {}) {
+  version = reportedVersion(version);
   if (!positiveInteger(timeoutMs) || timeoutMs > 2 ** 31 - 1 || !positiveInteger(maxBytes)) {
     throw safeError('CODEX_INVALID_OPTIONS', 'Codex 连接参数无效');
   }
@@ -339,12 +336,14 @@ export async function connectCodexRpc({ socketPath, version = '0.166.0', timeout
     });
     // Do not carry pending state across a replaced socket, even at the same pathname.
     if ((await inspectSocket(identity.socketPath)).instanceId !== identity.instanceId) throw invalidSocket();
-    await request('initialize', {
+    const initialization = await request('initialize', {
       clientInfo: { name: 'kuaimai_codex_bridge', version: '1.0.0' },
       capabilities: { experimentalApi: true, optOutNotificationMethods: [
         'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/summaryPartAdded',
       ] },
     }, {}, true);
+    if (!record(initialization) || typeof initialization.userAgent !== 'string' || !initialization.userAgent.trim())
+      throw safeError('CODEX_PROTOCOL_INCOMPATIBLE', 'Codex 初始化响应不兼容');
     if (closed || initialized) throw safeError('CODEX_CONNECTION_FAILED', 'Codex 初始化未完成');
     initialized = true;
     await new Promise((resolve, reject) => {

@@ -93,7 +93,7 @@ export function createCodexDesktopRuntime({ run = exec, discover = discoverCodex
         await command('codex', ['app-server', 'daemon', 'start'], 30000);
         daemon = await discover();
       }
-      if (!daemon.ready) fail(409, '共享 daemon 未就绪或版本不受桥接器支持，桌面端尚未退出');
+      if (!daemon.ready) fail(409, '共享 daemon 未就绪或 socket 校验失败，桌面端尚未退出');
       const url = desktopSocketUrl(daemon.socketPath);
       try { await probeSocket(url); }
       catch { fail(409, '共享 socket 的 WebSocket 连接验证失败，桌面端尚未退出'); }

@@ -41,6 +41,27 @@ test('a running daemon does not hide a private stdio app-server; stdin and stdou
   assert.equal((await inspect({ files: stdioFiles, processTable: table.replace('30 10', '30 999') })).mode, 'unknown');
   assert.equal((await inspect({ files: stdioFiles, daemon: { ready: false } })).mode, 'stdio');
 });
+test('新版桌面的直接 Node utility 子进程可持有共享 socket，其他辅助进程不能冒认', async () => {
+  const helper='/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)';
+  const processTable=table+`501 40 10 ${helper}\n`;
+  const argumentsText=args+`40 ${helper} --type=utility --utility-sub-type=node.mojom.NodeService\n`;
+  const files=sharedFiles.replace('p10\0','p40\0');
+  assert.equal((await inspect({processTable,argumentsText,files})).mode,'shared');
+  for(const patch of [
+    {processTable:processTable.replace('40 10','40 999')},
+    {processTable:processTable.replace('501 40','502 40')},
+    {processTable:processTable.replace(helper,'/Other.app/helper')},
+    {argumentsText:argumentsText.replace('--type=utility','--type=renderer')},
+    {argumentsText:argumentsText.replace('node.mojom.NodeService','network.mojom.NetworkService')},
+    {secondTable:processTable.replace('40 10','40 1')},
+  ])assert.equal((await inspect({processTable,argumentsText,files,...patch})).mode,'unknown');
+  const stdio=stdioFiles.replace('p10\0','p40\0');
+  assert.equal((await inspect({processTable:processTable.replace('30 10','30 40'),argumentsText,files:stdio})).mode,'stdio');
+});
+test('未就绪的共享服务不被误判为私有 stdio',async()=>{
+  const result=await inspect({daemon:{ready:false}});
+  assert.equal(result.mode,'unknown');
+});
 test('ambiguous transports, stale identities, unsupported inspection and other users remain unknown', async () => {
   for (const input of [
     { files: sharedFiles + stdioFiles }, { fail: '/usr/sbin/lsof' },

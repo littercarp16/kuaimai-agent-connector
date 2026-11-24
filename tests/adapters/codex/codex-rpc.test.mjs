@@ -32,7 +32,7 @@ test('服务端答复在写入背压下有界失败，未知结果仍不允许�
  assert.equal(result,'CODEX_RESULT_UNKNOWN','写预算不等于写入时间有界');await assert.rejects(f.client.respond('backpressure-q',{answers:{}}),e=>e.code==='NOT_SUBMITTED');
 });
 
-async function fixture(t, { initialize = true, handshake = true, nested = false } = {}) {
+async function fixture(t, { initialize = true, initializationResult = { userAgent: 'fixture' }, handshake = true, nested = false } = {}) {
   const directory = await mkdtemp(path.join(tempRoot, 'cdx-'));
   await chmod(directory, 0o700);
   const socketParent = nested ? path.join(directory, 'p') : directory;
@@ -59,7 +59,7 @@ async function fixture(t, { initialize = true, handshake = true, nested = false 
     ws.on('message', bytes => {
       const message = JSON.parse(bytes.toString());
       peer.messages.push(message);
-      if (initialize && message.method === 'initialize') send(peer, { id: message.id, result: { userAgent: 'fixture' } });
+      if (initialize && message.method === 'initialize') send(peer, { id: message.id, result: initializationResult });
     });
   });
   server.listen(socketPath);
@@ -148,50 +148,23 @@ test('官方受保护control socket别名可解析到自有私有短路径，仍
 });
 test('socket本身可被其它账户写入时拒绝接入，不自行chmod修好厂商服务',async t=>{const f=await fixture(t);await chmod(f.socketPath,0o666);assert.equal((await rpc.discoverCodexDaemon({run:async()=>versionOutput(f.socketPath)})).ready,false);await assert.rejects(rpc.connectCodexRpc({socketPath:f.socketPath}),e=>e.code==='CODEX_UNSAFE_SOCKET');});
 
-test('discovery rejects absent/stopped/unknown or incompatible daemon versions without starting anything', async t => {
-  assert.equal(typeof rpc.discoverCodexDaemon, 'function');
-  const f = await fixture(t);
-  const baseline = JSON.parse(versionOutput(f.socketPath).stdout);
-  for (const patch of [
-    { status: 'stopped' }, { status: 'missing' }, { status: undefined },
-    { cliVersion: '0.167.0', appServerVersion: '0.167.0' },
-    { cliVersion: '0.167.2-alpha.1', appServerVersion: '0.167.2-alpha.1' },
-    { cliVersion: '0.167.3', appServerVersion: '0.167.3' },
-    { cliVersion: '0.167.2', appServerVersion: '0.166.0' },
-    { cliVersion: '0.166.0', appServerVersion: '0.168.0' },
-    { cliVersion: '0.168.0', appServerVersion: '0.167.2' },
-    { cliVersion: '0.168.1', appServerVersion: '0.168.1' },
-    { cliVersion: '0.167.2', appServerVersion: '0.169.0' },
-    { cliVersion: '0.169.0', appServerVersion: '0.168.0' },
-    { cliVersion: '0.169.1', appServerVersion: '0.169.1' },
-    { cliVersion: '1.166.0', appServerVersion: '1.166.0' },
-    { cliVersion: '0.166.0-beta', appServerVersion: '0.166.0-beta' },
-    { appServerVersion: '0.166.1' }, { cliVersion: null },
-  ]) {
-    let calls = 0;
-    const found = await rpc.discoverCodexDaemon({ run: async () => { calls++; return { stdout: JSON.stringify({ ...baseline, ...patch }) }; } });
-    assert.equal(found.ready, false, JSON.stringify(patch));
-    assert.equal(found.version, null);
-    assert.match(found.message, /[\u4e00-\u9fff]/);
-    assert.equal(calls, 1);
-    assert.equal(found.socketPath, undefined);
+test('discovery rejects non-running daemons but never gates CLI/server release combinations', async t => {
+  const f = await fixture(t), baseline = JSON.parse(versionOutput(f.socketPath).stdout);
+  for (const status of ['stopped', 'missing', undefined]) {
+    const found = await rpc.discoverCodexDaemon({ run: async () => ({ stdout: JSON.stringify({ ...baseline, status }) }) });
+    assert.equal(found.ready, false); assert.equal(found.socketPath, undefined);
   }
   for (const [cliVersion, appServerVersion] of [
-    ['0.166.7', '0.166.7'],
-    ['0.167.2', '0.167.2'],
-    ['0.167.2', '0.168.0'],
-    ['0.168.0', '0.168.0'],
-    ['0.168.0', '0.169.0'],
-    ['0.169.0', '0.169.0'],
+    ['0.166.7', '0.166.7'], ['0.167.2', '0.168.0'], ['0.168.0', '0.171.0'],
+    ['0.168.0', '0.172.0'], ['0.168.0', '0.999.99'], ['0.168.0', '2.0.0-beta.1'],
+    ['2.0.0', '0.166.0'], [null, 'nightly-20270101'], [null, null],
   ]) {
-    const supported = await rpc.discoverCodexDaemon({ run: async () => ({
+    const found = await rpc.discoverCodexDaemon({ run: async () => ({
       stdout: JSON.stringify({ ...baseline, cliVersion, appServerVersion }),
     }) });
-    assert.equal(supported.ready, true);
-    assert.equal(supported.version, appServerVersion);
-    const client = await rpc.connectCodexRpc(supported);
-    assert.equal(client.version, appServerVersion);
-    client.close();
+    assert.equal(found.ready, true); assert.equal(found.version, appServerVersion);
+    const client = await rpc.connectCodexRpc(found);
+    assert.equal(client.version, appServerVersion); client.close();
   }
 });
 
@@ -278,7 +251,7 @@ test('real HTTP Upgrade initializes once per connection with the truthful client
       'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/summaryPartAdded',
     ] },
   } }, { method: 'initialized' }]);
-  assert.equal(client.version, '0.166.0');
+  assert.equal(client.version, null);
   assert.equal(client.closed, false);
   assert.equal(client.instanceId, (await rpc.discoverCodexDaemon({ run: async () => versionOutput(socketPath) })).instanceId);
 });
@@ -559,7 +532,7 @@ test('message byte limits reject outbound before send and close on oversized inb
   assert.equal(client.closed, true);
 });
 
-test('handshake/initialize timeouts, unsafe paths and future versions fail safely without daemon startup', async t => {
+test('handshake/initialize timeouts and unsafe paths fail safely without daemon startup', async t => {
   assert.equal(typeof rpc.connectCodexRpc, 'function');
   const f = await fixture(t, { initialize: false });
   await assert.rejects(() => rpc.connectCodexRpc({ socketPath: f.socketPath, timeoutMs: 25 }), error => {
@@ -567,7 +540,6 @@ test('handshake/initialize timeouts, unsafe paths and future versions fail safel
     return true;
   });
   assert.equal(f.peers.length, 1);
-  await assert.rejects(() => rpc.connectCodexRpc({ socketPath: f.socketPath, version: '0.167.0' }));
   await assert.rejects(() => rpc.connectCodexRpc({ socketPath: 'relative' }));
   const alias = path.join(f.directory, 'alias');
   await symlink(f.socketPath, alias);
@@ -636,4 +608,12 @@ test('subscriber exceptions cannot leak uncaught errors or prevent later subscri
   send(peer, { method: 'fixture/note', params: {} });
   await waitFor(() => events.length === 1);
   assert.equal(client.closed, false);
+});
+
+test('successful RPC envelopes with incompatible initialize bodies are rejected', async t => {
+  for (const initializationResult of [null, [], {}, { userAgent: 7 }, { userAgent: '' }]) {
+    const f = await fixture(t, { initializationResult });
+    await assert.rejects(rpc.connectCodexRpc({ socketPath: f.socketPath, version: '99.0.0' }), { code: 'CODEX_PROTOCOL_INCOMPATIBLE' });
+    assert.ok(!f.peers[0].messages.some(m => m.method === 'initialized'));
+  }
 });

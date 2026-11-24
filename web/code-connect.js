@@ -5,11 +5,12 @@
   const endpointKey = 'km-agent.code.endpoint', grantKey = 'km-agent.code.direct-grant', pendingKey = 'km-agent.code.pending';
   const paths = new Set(['/v1/health','/v1/snapshot','/v1/events','/v1/run','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/qwen/desktop','/v1/codex/desktop/restart','/v1/qwen/desktop/ensure']);
   const code = /^[\w-]{43}$/;
+  const requestTtlMs = 10 * 60 * 60 * 1000;
   const read = (storage, key) => { try { return JSON.parse(storage.getItem(key)); } catch { return null; } };
   const random = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
   const validEndpoint = value => { try { const u = new URL(value); return u.origin === value && u.protocol === 'http:' && u.hostname === '127.0.0.1' && Number(u.port) >= 1024 && !u.username && !u.password; } catch { return false; } };
   const validGrant = value => value && validEndpoint(value.endpoint) && typeof value.instanceId === 'string' && code.test(value.reconnectToken || '') && value.expiresAt > Date.now();
-  const validPending = value => value && code.test(value.state || '') && code.test(value.verifier || '') && Date.now() - value.created < 1800000;
+  const validPending = value => value && code.test(value.state || '') && code.test(value.verifier || '') && Date.now() - value.created < requestTtlMs;
   const needsExtension = ['http://lt.com:8085', 'http://local.lt.com:8251'].includes(location.origin);
   const extensionHint = '此 HTTP 页面需要“快麦本地 Agent 连接”扩展。请让 Agent 执行最新连接请求，安装扩展后刷新本页。';
   let extensionConnection;
@@ -125,17 +126,18 @@
           return localFetch(value, { ...init, method, headers, credentials:'omit', cache:'no-store', redirect:'error', signal:AbortSignal.any([lifetime.signal,init.signal].filter(Boolean)) });
         },
       };
-      onStatus('本机连接器已接入'); return session;
+      onStatus('本机连接器已接入', { phase: 'connected' }); return session;
     }
     async function waitForGrant(value, signal) {
-      onStatus('请将连接请求交给本地 Agent，安装启动后会在本页自动连接');
-      const saved = read(localStorage, endpointKey); let candidates = [], nextDiscovery = 0;
+      onStatus('请将连接请求交给本地 Agent，安装启动后会在本页自动连接', { phase: 'waiting-for-agent' });
+      const saved = read(localStorage, endpointKey); let candidates = [], nextDiscovery = 0, found = false;
       while (!signal.aborted && validPending(value)) {
         if (needsExtension) {
           try { await extensionTransport(); }
-          catch (error) { onStatus(error.message); await delay(2000, signal); continue; }
+          catch (error) { if (!signal.aborted) onStatus(error.message, { phase: 'waiting-for-agent' }); await delay(2000, signal); continue; }
         }
         if (Date.now() >= nextDiscovery) { candidates = await discover(signal, saved); nextDiscovery = Date.now() + 5000; }
+        if (signal.aborted) break;
         for (const descriptor of candidates) {
           // A failed mutating response is never blindly resent. Ask for a fresh
           // request if acknowledgement was lost instead of creating duplicate clients.
@@ -148,14 +150,22 @@
             if (error.status !== 409) throw error;
             candidates = []; nextDiscovery = 0; break;
           }
+          if (signal.aborted) throw Error('连接准备已取消');
           if (!data.pending) return accept(descriptor, data);
+          if (!found && !signal.aborted) {
+            found = true;
+            onStatus('已找到本机连接器，等待本地 Agent 执行连接请求以完成本页授权', { phase: 'waiting-for-agent' });
+          }
         }
         await delay(1500, signal);
       }
       throw signal.aborted ? Error('连接准备已取消') : Error('连接请求已过期，请重新复制');
     }
     function track(work) {
-      pending = work.finally(() => { if (pending === tracked) pending = null; }); const tracked = pending;
+      pending = work.catch(error => {
+        if (pending === tracked) onStatus(error.message, { phase: 'error' });
+        throw error;
+      }).finally(() => { if (pending === tracked) pending = null; }); const tracked = pending;
       pending.catch(() => {}); return pending;
     }
     function prepare({ onRequest = () => {}, provider } = {}) {
@@ -176,7 +186,7 @@
       if (validPending(waiting)) return track(waitForGrant(waiting,signal));
       const grant = read(sessionStorage,grantKey);
       if (!validGrant(grant)) return Promise.reject(Error('请先复制最新连接请求给本地 Agent；准备完成后将在本页自动接入，无需连接窗口'));
-      onStatus('正在恢复本页的本机连接…');
+      onStatus('正在恢复本页的本机连接…', { phase: 'connecting' });
       return track((async () => {
         let descriptor;
         if (passive) {
@@ -184,12 +194,13 @@
         } else descriptor = (await discover(signal,grant)).find(item => item.instanceId === grant.instanceId);
         if (!descriptor || descriptor.endpoint !== grant.endpoint || descriptor.instanceId !== grant.instanceId || descriptor.transport !== 'direct/1') throw Error('后台服务已变化，请重新复制连接请求；网页会自动识别新端口');
         const data = await request(descriptor.endpoint,'/v1/connect/direct-resume',{reconnectToken:grant.reconnectToken,instanceId:grant.instanceId},signal);
+        if (signal.aborted) throw Error('连接准备已取消');
         return accept(descriptor,data,grant);
       })());
     }
     function hasSaved() { return !!(validGrant(read(sessionStorage,grantKey)) || validPending(read(sessionStorage,pendingKey))); }
     function close({ forget = false } = {}) {
-      controller?.abort(); const current = session; session = null;
+      controller?.abort(); pending = null; const current = session; session = null;
       if (forget) {
         const grant = read(sessionStorage,grantKey); sessionStorage.removeItem(grantKey); sessionStorage.removeItem(pendingKey); localStorage.removeItem(endpointKey);
         if (validGrant(grant)) void request(grant.endpoint,'/v1/connect/direct-revoke',{reconnectToken:grant.reconnectToken,instanceId:grant.instanceId},undefined,2000).catch(() => {});

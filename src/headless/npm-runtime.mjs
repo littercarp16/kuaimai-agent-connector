@@ -21,7 +21,7 @@ export async function ensureNpmRuntime({ root = dataRoot(), spec = `${PACKAGE}@$
   }
   if (await installed()) return packageDir;
   let release;
-  try { release = await claimService(join(installs, 'install'), VERSION); }
+  try { release = await claimService(join(installs, VERSION + '.install'), VERSION); }
   catch { for (let i = 0; i < 120; i++) { await delay(500); if (await installed()) return packageDir; } throw Error('另一个安装任务尚未完成，请稍后重试'); }
   let staging;
   try {

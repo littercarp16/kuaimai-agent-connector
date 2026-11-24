@@ -25,7 +25,7 @@ const equal=(a,b)=>{const x=Buffer.from(String(a)),y=Buffer.from(String(b));retu
 
 export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'],pairCode=String(randomInt(100000,1000000)),onPairCode=()=>{},publisherKey=randomBytes(32).toString('base64url'),publisherCommand=null,onBindings=()=>{},autoTrust=null,now=Date.now,enableWorkBuddy=false,workBuddyOptions={},enableMultiAgentFollow=false,codexDesktop=null,qwenDesktop=null,desktopConnect=null,projectIndependentSessions=false,logger=nullLogger}={}) {
   if(!adapter?.health)throw Error('需要 Agent 适配器');
-  const origins=new Set(allowedOrigins.map(value=>{const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.origin!==value)throw Error('来源必须是精确HTTP Origin');return value;}));
+  const origins=new Set();for(const origin of allowedOrigins)allowOrigin(origin);
   if(autoTrust&&(!origins.has(autoTrust.origin)||!/^http:\/\/127\.0\.0\.1:\d+$/.test(autoTrust.origin)||autoTrust.sessionId!=null&&!/^ses[\w-]+$/.test(autoTrust.sessionId)))throw Error('自动授权必须指定受信loopback来源及有效会话');
   if(autoTrust?.allowControl===true&&(!autoTrust.sessionId||adapter.descriptor?.id==='generic'||adapter.descriptor?.id==='workbuddy'))throw Error('网页控制必须明确原生OpenCode会话');
   const instanceId=randomUUID(),clients=new Map(),streams=new Set(),rates=new Map(),hubs=new Map(),cleanups=new Set();
@@ -108,8 +108,24 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     }finally{client.bindingBusy=false;follow.tick(client);}
   }
   function authenticate(req,origin){const token=req.headers.authorization?.replace(/^Bearer /,'');const client=token&&clients.get(token);if(!client||!client.active||client.origin!==origin||client.expires<now())fail(401,'连接授权已失效，请重新配对');return client;}
-  function makeClient(origin,websiteOrigin=origin){if(clients.size>=12)fail(409,'本次连接器授权数已达上限');const token=randomBytes(32).toString('base64url'),client={origin,active:true,expires:now()+8*3600e3,revision:0,sessionId:null,run:null,streams:new Set(),requests:new Map()};client.websiteOrigin=websiteOrigin;follow.init(client,autoTrust?.origin===origin);clients.set(token,client);connected(client);return{token,client};}
+  function requireClientSlot(websiteOrigin) {
+    if ([...clients.values()].filter(client => (client.websiteOrigin || client.origin) === websiteOrigin).length >= 12)
+      fail(409, '此网页来源的连接授权数已达上限');
+  }
+  function makeClient(origin,websiteOrigin=origin){requireClientSlot(websiteOrigin);const token=randomBytes(32).toString('base64url'),client={origin,active:true,expires:now()+8*3600e3,revision:0,sessionId:null,run:null,streams:new Set(),requests:new Map()};client.websiteOrigin=websiteOrigin;follow.init(client,autoTrust?.origin===origin);clients.set(token,client);connected(client);return{token,client};}
   function releaseDirectClient(token,reason='replaced'){const client=clients.get(token);if(!client)return;disconnected(client,reason);client.active=false;clearTimeout(client.timer);for(const stream of client.streams)stream.end();clients.delete(token);follow.reconcile();void detach(client).catch(()=>{});}
+  function allowOrigin(origin) {
+    const url = new URL(origin);
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin) throw Error('来源必须是精确HTTP Origin');
+    origins.add(origin);
+  }
+  function revokeOrigin(origin) {
+    origins.delete(origin);
+    desktopConnect?.revokeOrigin?.(origin);
+    desktopConnect?.direct?.revokeOrigin?.(origin);
+    for (const [token, client] of clients) if ((client.websiteOrigin || client.origin) === origin) releaseDirectClient(token, 'origin_revoked');
+    for (const key of rates.keys()) if (key.startsWith(origin + ':')) rates.delete(key);
+  }
   async function body(req,keys,limit=20000){if(!req.headers['content-type']?.startsWith('application/json')||req.headers['x-km-agent']!=='1')fail(415,'需要受控的JSON请求');const chunks=[];let bytes=0;for await(const chunk of req){bytes+=chunk.length;if(bytes>limit)fail(413,'请求内容过长');chunks.push(chunk);}let value;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{fail(400,'JSON格式无效');}if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!keys.includes(key)))fail(400,'请求字段不符合约定');return value;}
   function updateOutput(client,messages) {
     const run=client.run,artifacts=new Map();let plan=null;const warnings=[];
@@ -237,6 +253,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         rate(origin+':direct-connect',60);
         const value=await body(req,claim?['state','verifier','instanceId']:['reconnectToken','instanceId']);
         if(value.instanceId!==instanceId)fail(409,'连接器实例已变化，请重新复制连接请求');
+        if(claim)requireClientSlot(origin);
         let grant;
         try{
           if(revoke){releaseDirectClient(desktopConnect.direct.revoke({...value,origin}),'revoked');return json(res,200,{ok:true,data:null});}
@@ -270,6 +287,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       }
       if(req.url==='/v1/pair'&&req.method==='POST') {
         rate(origin+':pair',10);const value=await body(req,['code']);
+        if(!origins.has(origin)&&!(desktopConnect&&origin===localEndpoint))fail(403,'本地连接器不接受此来源');
         if(typeof value.code!=='string'||!/^\d{6}$/.test(value.code)||now()>codeExpires||!equal(value.code,code))fail(403,'配对码无效或已过期，请查看连接器终端中的最新配对码');
         revokeExpired();
         if(clients.size>=4)fail(409,'本次连接器配对数已达上限，请先撤销不用的连接');
@@ -401,5 +419,5 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   server.requestTimeout=10000;server.headersTimeout=10000;
   const leaseTimer=setInterval(()=>{revokeExpired();workBuddy?.sweep();},10000);leaseTimer.unref();
   async function close(){if(closed)return;closed=true;desktopConnect?.clear();desktopConnect?.direct?.clear();follow.close();clearInterval(leaseTimer);await codexDesktop?.close();await qwenDesktop?.close();for(const client of clients.values()){disconnected(client,'service_stopped');client.abort?.abort();clearTimeout(client.timer);if(client.run?.sessionId&&BUSY.has(client.run?.status))void adapter.interrupt?.(client.run?.sessionId).catch(()=>{});client.active=false;}const active=[...hubs.values()].map(retireHub);hubs.clear();await Promise.all([...active,...cleanups]);workBuddy?.close();await adapter.close?.();for(const res of streams)res.end();if(server.listening){const stopped=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await stopped;}}
-  return {server,close,instanceId};
+  return {server,close,instanceId,allowOrigin,revokeOrigin};
 }

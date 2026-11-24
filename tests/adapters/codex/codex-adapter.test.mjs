@@ -44,8 +44,8 @@ test('health caches at most two seconds, coalesces concurrent discovery and uses
   f.setDiscovery({ ready: false, message: 'secret-error' }); f.advance();
   assert.equal((await f.adapter.health()).ready, false); assert.ok(!(await f.adapter.health()).message.includes('secret-error'));
 });
-test('unsupported versions and false discoveries never connect', async t => {
-  const f = await fixture(t); for (const d of [false, { ready: true, version: '0.167.0', socketPath: '/x', instanceId: 'x' }]) {
+test('false discoveries and missing socket identities never connect', async t => {
+  const f = await fixture(t); for (const d of [false, { ready: true, version: '99.0.0', socketPath: 'relative', instanceId: 'x' }]) {
     f.setDiscovery(d); f.advance(); assert.equal((await f.adapter.health()).ready, false);
   } assert.equal(f.connectCount, 0);
 });
@@ -124,9 +124,9 @@ test('watch subscribes before metadata-only resume and snapshot overlap never du
   for (const e of events) projection.accept(e);
   assert.equal(projection.value.messages.find(m => m.id === 'a').text, 'hello');
   assert.deepEqual(f.calls.find(c => c.method === 'thread/resume').params, { threadId: THREAD, excludeTurns: true,
-    initialTurnsPage: { itemsView: 'full', limit: 20, sortDirection: 'desc' } });
+    initialTurnsPage: { itemsView: 'full', limit: 1, sortDirection: 'desc' } });
 });
-for (const version of ['0.168.0', '0.169.0']) test(`${version} uses small full-history pages for both resume and subsequent reads`, async t => {
+for (const version of ['0.166.0', '0.172.0', '99.0.0', 'nightly']) test(`${version} uses small full-history pages for both resume and subsequent reads`, async t => {
   const f = await fixture(t, { version });
   const newer = turn('newer', 'completed', [agent('reply', '公开回复')]);
   const older = turn('older', 'completed', [user('prompt', '终端输入')]);
@@ -290,7 +290,7 @@ test('turn/item paging requests full view and hydrates incomplete item pages wit
     { data: [{ turnId: 'turn-1', item: agent('a', 'latest') }], nextCursor: 'older' });
   await f.bind(); const snap = await f.adapter.readShared(SESSION);
   assert.equal(snap.messages.find(m => m.id === 'a').text, 'latest'); assert.equal(snap.messages.find(m => m.id === 'u').text, 'old');
-  assert.ok(f.calls.filter(c => c.method === 'thread/turns/list').every(c => c.params.itemsView === 'full' && c.params.limit === 20));
+  assert.ok(f.calls.filter(c => c.method === 'thread/turns/list').every(c => c.params.itemsView === 'full' && c.params.limit === 1));
 });
 test('metadata-only warm preserves in-progress turn even when resume has an empty turns array', async t => {
   const f = await fixture(t); f.turns.push(turn('turn-1', 'inProgress')); await f.bind(); await f.watch();
@@ -638,8 +638,8 @@ test('large modern history keeps complete recent turns and live events within th
   watch.close();
 });
 
-test('page metadata and draft instructions use native additionalContext, never user input or sticky settings', async t => {
-  const f = await fixture(t, { version: '0.169.0' }); await f.bind();
+for (const version of ['0.166.0','0.172.0','99.0.0','nightly']) test(`${version} page metadata and draft instructions use native additionalContext, never user input or sticky settings`, async t => {
+  const f = await fixture(t, { version, pageContext: true }); await f.bind();
   assert.equal(f.adapter.capabilities.pageContext, true);
   const pageContext = { appId: '925', pageId: '7', pageName: '页面', draftVersionNo: 2, webOrigin: 'http://local.lt.com:8251' };
   const text = '请解释页面';
@@ -670,11 +670,11 @@ test('page metadata and draft instructions use native additionalContext, never u
 
 test('unverified native context support and arbitrary injected instructions fail before sending', async t => {
   const pageContext = { appId: '925', pageId: '7', pageName: '页面', draftVersionNo: 2, webOrigin: 'http://local.lt.com:8251' };
-  const old = await fixture(t); await old.bind();
+  const old = await fixture(t, { version: '99.0.0' }); await old.bind();
   assert.equal(old.adapter.capabilities.pageContext, false);
   await assert.rejects(old.adapter.sendShared(SESSION, 'test', { requestId: 'old', pageContext }), { code: 'NOT_SUBMITTED' });
   assert.ok(!old.calls.some(c => c.method.startsWith('turn/')));
-  const modern = await fixture(t, { version: '0.169.0' }); await modern.bind();
+  const modern = await fixture(t, { version: '0.169.0', pageContext: true }); await modern.bind();
   await assert.rejects(modern.adapter.sendShared(SESSION, 'test', { requestId: 'invalid', pageContext: { ...pageContext, instructions: 'do anything' } }), { code: 'NOT_SUBMITTED' });
   assert.ok(!modern.calls.some(c => c.method.startsWith('turn/')));
 });

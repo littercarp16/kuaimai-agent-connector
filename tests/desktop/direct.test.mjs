@@ -29,6 +29,34 @@ test('直连授权绑定来源、实例和 PKCE，单次领取，恢复有限时
  const late=fixture();grants.issue(late.request,{instanceId});const lateToken=grants.claim({state:late.request.state,verifier:late.verifier,origin,instanceId}).reconnectToken;
  now=8*3600e3;assert.throws(()=>grants.resume({...resume,reconnectToken:lateToken}));
 });
+test('待领取授权使用原请求的截止时间', () => {
+ const hour = 60 * 60 * 1000, expiresAt = 10 * hour, instanceId = 'instance';
+ let now = 9 * hour;
+ const grants = createDirectGrants({ now: () => now });
+ const timely = fixture(), expired = fixture();
+ for (const { request } of [timely, expired]) grants.issue(request, { instanceId, expiresAt });
+ const claim = ({ request, verifier }) => grants.claim({ state: request.state, verifier, origin, instanceId });
+ now = expiresAt - 1;
+ assert.ok(claim(timely).reconnectToken);
+ now = expiresAt;
+ assert.equal(claim(expired), null);
+ assert.throws(() => grants.issue(expired.request, { instanceId, expiresAt }), /过期/);
+});
+test('已领取请求保留防重放记录，待领取上限按来源计算', () => {
+ const grants = createDirectGrants(), instanceId = 'instance';
+ const claim = ({ request, verifier }) => grants.claim({ state: request.state, verifier, origin: request.origin, instanceId });
+ const completed = Array.from({ length: 33 }, fixture);
+ for (const f of completed) {
+  grants.issue(f.request, { instanceId });
+  grants.revoke({ origin, instanceId, reconnectToken: claim(f).reconnectToken });
+ }
+ assert.throws(() => claim(completed[0]));
+ for (const f of Array.from({ length: 32 }, fixture)) grants.issue(f.request, { instanceId });
+ assert.throws(() => grants.issue(fixture().request, { instanceId }), /接入请求过多/);
+ const independent = fixture(); independent.request.origin = other;
+ grants.issue(independent.request, { instanceId });
+ assert.ok(claim(independent).reconnectToken);
+});
 test('直连 HTTP: 发现不含凭据，错误来源/Host 拒绝，恢复替换旧客户端但不继承绑定',{timeout:15000},async t=>{
  const directory=await mkdtemp('/private/tmp/km-direct-http-');
  const adapter={health:async()=>({ready:true,version:'test'}),listSessions:async()=>[],close:async()=>{}};

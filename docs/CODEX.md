@@ -2,7 +2,7 @@
 
 ## 范围
 
-网页通过 Connector HTTP/SSE 接入 **已经运行的 Codex 共享 App Server**。支持 CLI 与服务同版本的 `0.166.x`、`0.167.2`、`0.168.0`、`0.169.0`，以及 CLI/TUI `0.167.2` 搭配服务 `0.168.0`、CLI `0.168.0` 搭配服务 `0.169.0`。连接器按服务端版本选择 RPC 行为。
+网页通过 Connector HTTP/SSE 接入 **已经运行的 Codex 共享 App Server**。版本号仅用于诊断，不再限制具体版本、版本上限或 CLI/服务端的版本组合。是否可用取决于实际 Unix socket、WebSocket / RPC 初始化以及只读 `thread/list` 响应的协议校验。
 
 Desktop、IDE、远端和`--no-daemon`会话只有在连接器能访问承载该会话的受支持共享服务时，才能同步运行中的事件。
 
@@ -27,7 +27,7 @@ npm run codex:desktop -- status
 
 检测使用同一用户的进程关系及 macOS `lsof` Unix socket 地址/对端：桌面主进程的连接必须指向已校验 daemon 路径的服务端 socket，单纯存在 daemon、环境变量或普通 IPC socket 不算共享接入。私有 stdio 要同时确认桌面的 app-server 子进程及其 stdin/stdout 与桌面相连。多种通信方式并存、其他 daemon、权限不足或检测期间进程/daemon 更换均视为未确认，不据此退出应用。
 
-仅私有 stdio 分支执行：确认或 `codex app-server daemon start` 启动共享服务 → 从受支持版本及所有权/权限检查得到规范 socket 路径 → 验证该 `ws+unix` URL 的 WebSocket 握手 → 再次核验桌面通信方式 → 正常退出桌面端 → 确认进程退出 → 用 `open -a /Applications/ChatGPT.app --env …` 携带显式 `CODEX_APP_SERVER_WS_URL` 重开 → 核验实际共享 socket 连接。准备失败时不退出桌面。若准备期间桌面已自行切为共享连接，则直接复用。启动时一并传入 `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1` 和连接器使用的 `CODEX_HOME`。不会 restart/update 已有 daemon。
+仅私有 stdio 分支执行：确认或 `codex app-server daemon start` 启动共享服务 → 从 daemon 状态及所有权/权限检查得到规范 socket 路径 → 验证该 `ws+unix` URL 的 WebSocket 握手 → 再次核验桌面通信方式 → 正常退出桌面端 → 确认进程退出 → 用 `open -a /Applications/ChatGPT.app --env …` 携带显式 `CODEX_APP_SERVER_WS_URL` 重开 → 核验实际共享 socket 连接。准备失败时不退出桌面。若准备期间桌面已自行切为共享连接，则直接复用。启动时一并传入 `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1` 和连接器使用的 `CODEX_HOME`。不会 restart/update 已有 daemon。
 
 退出使用 macOS 正常退出事件，可能需要系统自动化权限。拒绝退出或退出超时会保留失败状态，不强杀、不重复退出。macOS LaunchServices 可能在旧 PID 消失后短暂保留旧应用记录，使 `open` 返回 `-600 (procNotFound)`：仅针对这个明确失败，在确认应用未运行后等待 500/1000ms，最多共尝试打开 3 次，参数和环境保持不变；每次等待后再次检查应用是否已被用户打开，不创建额外实例。其它启动错误或超时不自动重试。已绑定的 Codex 会话执行中、待答或状态未知时拒绝重启，但允许直接复用共享连接；未绑定的桌面任务无法由连接器完整判断，网页提示私有连接需在任务结束后切换。
 
@@ -57,7 +57,7 @@ node codex-desktop.mjs dock-status
 node codex-desktop.mjs dock-disable
 ```
 
-启用时先校验安装包、daemon 版本/权限和 WebSocket 握手，再通过 `launchctl setenv` 设置 `CODEX_HOME`、`CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`、`CODEX_APP_SERVER_WS_URL`。URL 使用经过同一 daemon 身份核验的固定入口 `$CODEX_HOME/app-server-control/app-server-control.sock`，不持久化临时 socket 的规范路径。之后由 LaunchServices（包括 Dock）启动的新 ChatGPT 进程会继承这些设置；已经运行的桌面不被退出或重启。
+启用时先校验安装包、daemon 状态、权限和 WebSocket 握手，再通过 `launchctl setenv` 设置 `CODEX_HOME`、`CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`、`CODEX_APP_SERVER_WS_URL`。URL 使用经过同一 daemon 身份核验的固定入口 `$CODEX_HOME/app-server-control/app-server-control.sock`，不持久化临时 socket 的规范路径。之后由 LaunchServices（包括 Dock）启动的新 ChatGPT 进程会继承这些设置；已经运行的桌面不被退出或重启。
 
 安装的用户级启动项为 `~/Library/LaunchAgents/local.agent-connector.codex-dock.plist`，仅在 Aqua 登录会话运行。每次登录先幂等启动/确认 daemon，再发布环境；准备失败时不发布地址，launchd 以 30 秒节流重试。该设置不替换 Dock 图标、不修改 ChatGPT 安装包、不重启或升级已有 daemon，也不启用远程控制。它作用于当前用户的 GUI 启动环境中的这三个 Codex 变量。
 
@@ -109,7 +109,7 @@ node codex-desktop.mjs dock-disable
 
 目录别名发现使用只读 `thread/list` 元数据，默认最多 4 页、2 MiB，并用 `realpath` 精确核验工作区。全局历史超出预算时，改按已知工作区路径查询。这个查询也超出预算或没有命中时，返回 `CODEX_DISCOVERY_LIMIT`。未登记的目录别名依赖全局发现。
 
-服务端为 `0.168.0` / `0.169.0` 时，接入及刷新历史每页读取 5 轮，以适配长会话的单帧大小。保留现有分页、字节和公开快照上限。`0.169.0` 依据本机两个版本生成的实验协议 schema 对照适配；新增的 `attachedToThreadId` 附属线程按原有主线程范围排除，未笼统放开所有后续版本。
+所有版本的接入及刷新历史均每页读取 1 轮，以适配长会话的单帧大小，不再根据版本号切换分页大小。保留现有分页、字节和公开快照上限。`attachedToThreadId` 附属线程按原有主线程范围排除。
 
 本次有效turn/start或匹配turn/steer ACK确认输入已接收，不再等待整轮事件队列或历史userMessage落盘；accepted不表示模型/业务成功或前端applied。Codex仅使用原生UUID消息回流，不把client correlation合成第二条聊天。ACK未知/写后abort等仍保留UNKNOWN墓碑，不能用其它读取的NOT_SUBMITTED释放重发；后续scope核验独立保护观察范围，不撤回此前已知接收事实。撤权/换源在预检等待期间会中止本owner控制器，不停止原Agent。
 
@@ -136,3 +136,22 @@ node codex-desktop.mjs dock-disable
 设计、截图及部署见[接入记录](../../lingtong-prototypes/kmMDTable/agent/codex-notes.md)。代码未提交/推送。
 
 参考：[官方App Server](https://learn.chatgpt.com/docs/app-server)、[0.166.0实现](https://github.com/openai/codex/tree/rust-v0.166.0/codex-rs/app-server)。
+
+
+### 0.171.0 桌面兼容
+
+已依据本机官方 `0.171.0` 可执行文件生成的实验 JSON Schema 核对初始化、线程列表、历史分页与 `turn/start` / `turn/steer` 的 `additionalContext` 参数；保留原有消息大小、分页及授权限制。当时使用具体版本白名单；2026-11-24 起由下面的协议与能力检测替代。
+
+新版桌面可能由主进程的直接 Node utility 辅助进程持有共享 socket。通信检测同时检查主进程和该辅助进程的真实文件描述符，仍要求当前用户、固定应用包路径、直接父子关系、Node utility 参数、daemon socket 对端匹配，并在判定前复核进程身份。普通渲染进程、其他应用和同用户的独立 Node 进程不会被当作桌面连接。
+
+2026-11-23 本机只读验收：CLI `0.168.0` + app-server `0.171.0`，检测结果 `shared`，RPC 初始化成功，最近 10 条会话读取成功。真实验收未发送 prompt，也未重启 Codex；页面上下文发送由协议 Schema 与回归夹具核验。
+
+### 按协议与能力接入（2026-11-24）
+
+- `daemon version` 仅发现已运行服务和记录版本；CLI 与 daemon 版本不同、未来版本或未提供版本元数据均不单独阻断连接。socket 的当前用户所有权、目录权限、实例身份校验保持有效。
+- `initialize` 必须返回有效的 `userAgent`；随后只读请求 `thread/list`（limit=1），校验分页结构。方法缺失、参数不兼容或响应结构变化会明确报告协议验证失败。检测阶段不 resume 会话，不发送 prompt，不更改模型/审批，不启动或重启 Codex。
+- 网页上下文不再由版本推断。仅使用 daemon 报告的同版本受管可执行文件，核验文件权限与 `--version` 后，执行 `app-server generate-json-schema --experimental`，读取 `turn/start` 和 `turn/steer` 的 `additionalContext` 定义，确认二者支持 application 类型的 kind/value。它只导出协议定义，不启动 app-server。能力结果按规范文件路径及 inode/mtime 等身份缓存，临时文件立即清理；自动升级会失效旧缓存。
+- 无法读取协议定义、文件身份变化或缺少上下文字段时，仅禁用网页上下文，保留基础连接和会话列表。不会为了探测能力发送测试 prompt，也不会静默把上下文拼进用户输入。
+- 发送、停止、审批、问题答复继续校验真实响应；写入结果未知时不自动重发。没有版本上限不代表保证任何破坏性协议变更都能兼容，实际破坏性变更仍需适配。
+
+2026-11-24 本机只读验收：CLI `0.168.0` + app-server `0.172.0`，实际桌面通信 `shared`，初始化和线程列表通过，最近 10 条会话读取成功，`pageContext=true`。未来版本和预发布版本由回归夹具验证，不冒充真实版本实测。

@@ -16,7 +16,7 @@ export async function until(predicate) {
 }
 
 // In-memory App Server contract fixture. It cannot start Codex or access its files.
-export async function fixture(t, { version = '0.166.0', ...options } = {}) {
+export async function fixture(t, { version = '0.166.0', pageContext = false, ...options } = {}) {
   const tempRoot = path.join(tmpdir(), 'opencode'); await mkdir(tempRoot, { recursive: true });
   const root = await mkdtemp(path.join(tempRoot, 'codex-adapter-'));
   const directory = await realpath(root);
@@ -70,7 +70,7 @@ export async function fixture(t, { version = '0.166.0', ...options } = {}) {
   const { createCodexAdapter } = await import('../../src/adapters/codex/codex.mjs');
   const createAdapter = extra => {
     const value = createCodexAdapter({ directory, discover: async () => { discoveryCount++; return discovery; },
-      connect: async () => { connectCount++; return rpc; }, now: () => clock, resolvedTimeoutMs: 100, ...options, ...extra });
+      connect: async () => { connectCount++; return rpc; }, probe: async () => ({ pageContext }), now: () => clock, resolvedTimeoutMs: 100, ...options, ...extra });
     t.after(() => value.close()); return value;
   };
   const adapter = createAdapter();

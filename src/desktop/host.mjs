@@ -28,7 +28,7 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
   let log = logger || nullLogger;
   const runtimePath = join(directory, 'connector.json'), pending = new Map();
   const status = () => ({ state: connector ? 'running' : 'stopped', endpoint: endpoint || null,
-    instanceId: connector?.instanceId || null, sessionScope: 'agent', sessionLimit: 10, origins, pairCode: pairCode || null });
+    instanceId: connector?.instanceId || null, sessionScope: 'agent', sessionLimit: 10, origins: [...origins], pairCode: pairCode || null });
   const publish = () => onChange(status());
   function persist(key, instanceId) {
     const data = { instanceId, endpoint, protocol: 'km-agent/1', key, bindings };
@@ -80,19 +80,34 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
       return status();
     } catch (error) { log.error('service.start_failed', { instanceId: connector?.instanceId, error }); await stop(); throw error; }
   }
-  function inspectLink(url) {
+  function inspectLink(url, { requestExpiresAt } = {}) {
     if (!connector) throw Error('请先启动本机桥接');
     const request = parseConnectURL(url, origins);
     for (const [id, entry] of pending) if (entry.expires <= now()) pending.delete(id);
     if (pending.size >= 8) throw Error('接入请求过多，请稍后重试');
-    const id = randomBytes(24).toString('base64url'); pending.set(id, { request, expires: now() + 120000 });
+    const id = randomBytes(24).toString('base64url'); pending.set(id, { request, requestExpiresAt, expires: now() + 120000 });
     return { id, origin: request.origin, sessionScope: 'agent', sessionLimit: 10, browser: request.browser };
   }
   function authorize(id) {
     const entry = pending.get(id); pending.delete(id);
     if (!connector || !entry || entry.expires <= now()) throw Error('网页接入请求已过期，请回到网页重新点击接入');
     if (entry.request.transport === 'direct' && !directGrants) throw Error('请更新连接器以支持原页面直连');
-    return (entry.request.transport === 'direct' ? directGrants : grants).issue(entry.request, { endpoint, instanceId: connector.instanceId });
+    return (entry.request.transport === 'direct' ? directGrants : grants).issue(entry.request, { endpoint, instanceId: connector.instanceId, expiresAt: entry.requestExpiresAt });
   }
-  return { start, stop, status, inspectLink, authorize, prepareQwen() { return qwenDesktop?.ensure(); }, deny(id) { pending.delete(id); } };
+  function allowOrigin(origin) {
+    if (!connector || !validWebOrigin(origin)) throw Error('无效的网页来源');
+    if (origins.includes(origin)) return false;
+    if (origins.length >= 16) throw Error('连接器已达到网页来源上限，请先停止不用的来源');
+    connector.allowOrigin(origin);
+    origins.push(origin);
+    return true;
+  }
+  function revokeOrigin(origin) {
+    if (!origins.includes(origin)) return false;
+    origins = origins.filter(value => value !== origin);
+    for (const [id, entry] of pending) if (entry.request.origin === origin) pending.delete(id);
+    connector.revokeOrigin(origin);
+    return true;
+  }
+  return { start, stop, status, inspectLink, authorize, allowOrigin, revokeOrigin, prepareQwen() { return qwenDesktop?.ensure(); }, deny(id) { pending.delete(id); } };
 }

@@ -69,7 +69,7 @@ node publish.mjs receipt --session <ses...> --id <事件ID>
 | OpenCode | 已实接2.0.30原生双向会话 | 广播只发工具/技能摘要与思考耗时；完整公开详情按需鉴权读取 | 全部白名单 |
 | generic | 无厂商原生聊天订阅、无网页反向prompt | Agent主动发布公开活动，不冒充自动探测 | 全部白名单 |
 | WorkBuddy | 本机MCP主动上报，无网页反向prompt，不是原生会话镜像 | 仅公开phase/说明，不自动订阅全部技能/工具/subagent | 独立逻辑任务、作用域票据；新版自动查看/手选锁定；activity仅phase |
-| Codex CLI共享daemon | 0.166.x、0.167.2、0.168.0、0.169.0 原生同thread双向，默认观察；需先明确绑定 | 公开item/turn事件、受控工具详情及原RPC问题/单次审批；不含私有reasoning | 全部预览白名单；附件/网页新建/自动发现暂不开放 |
+| Codex CLI共享daemon | 按实际协议检测兼容，原生同thread双向，默认观察；需先明确绑定 | 公开item/turn事件、受控工具详情及原RPC问题/单次审批；不含私有reasoning | 全部预览白名单；附件/网页新建/自动发现暂不开放 |
 | 千问办公 macOS | 通过本机桌面 HTTP 接口同步指定会话，网页默认观察，授权后可在空闲时发送文字 | 按任务游标轮询回复增量 | 未接入 |
 | Claude Code 等 | 可执行本机 Node 命令时使用 generic | Agent 主动发布公开活动 | 通用白名单 |
 
@@ -156,7 +156,7 @@ V2接口为`session.form.list/get/reply/cancel`，不是V1的question API，也�
 
 ## 16. Codex原生来源与单次审批（1.4.0）
 
-详见[CODEX.md](CODEX.md)。连接器通过 Unix Socket WebSocket 接入已运行的共享 daemon。支持同版本的 `0.166.x`、`0.167.2`、`0.168.0`、`0.169.0`，以及 CLI `0.167.2` 搭配 daemon `0.168.0`、CLI `0.168.0` 搭配 daemon `0.169.0`。Codex 来源使用 `ses_codex_` 命名空间，`binding.nativeThreadId` 对应原生 `thread.id`。
+详见[CODEX.md](CODEX.md)。连接器通过 Unix Socket WebSocket 接入已运行的共享 daemon。版本号仅用于诊断，不限定 CLI 与 daemon 的版本组合；通过初始化和只读线程列表核验基础协议，网页上下文由当前服务的协议 Schema 检测。Codex 来源使用 `ses_codex_` 命名空间，`binding.nativeThreadId` 对应原生 `thread.id`。
 
 macOS 可显式调用 `POST /v1/codex/desktop/restart {instanceId,requestId}`。连接器先核验桌面实际通信方式：共享 Unix socket 直接复用，私有 stdio 才切换重启，未运行则启动，未确认则保留应用。沿用网页鉴权，GET `/v1/codex/desktop` 读取异步状态和 `action: reuse|restart|start`。`capabilities.codexDesktopRestart` 声明入口可用。日常发现不触发该操作。`completed` 确认桌面共享连接，目标会话仍需绑定；详见桌面端切换说明。
 

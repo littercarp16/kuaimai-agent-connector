@@ -52,6 +52,11 @@ export function createConnectGrants({ now = Date.now, ttlMs = 120000, reconnect 
       if (!grant || grant.expires <= now() || grant.origin !== websiteOrigin || grant.instanceId !== instanceId || requestOrigin !== endpoint) bad();
       return { websiteOrigin: grant.origin };
     },
+    revokeOrigin(origin) {
+      for (const map of [grants, resumptions]) {
+        for (const [token, grant] of map) if (grant.origin === origin) map.delete(token);
+      }
+    },
     clear() { grants.clear(); resumptions.clear(); },
   };
 }

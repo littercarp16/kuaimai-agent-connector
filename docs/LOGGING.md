@@ -4,14 +4,14 @@
 
 ## 文件位置
 
-- npm / headless 后台：`~/.kuaimai-agent/code/instances/<网站标识>/service.log`。运行 `node headless.mjs status --origin <网页来源>`，查看返回的 `logging.path`。
+- npm / headless 共享后台：`~/.kuaimai-agent/code/instances/shared/service.log`。运行 `node headless.mjs status --origin <网页来源>`，查看返回的 `logging.path`。
 - 直接 CLI / 技能启动器：项目 `.runtime/connector.log`，指定其他首选端口时为 `.runtime/connector-<首选端口>.log`。
 - macOS App 宿主：应用运行目录下的 `service.log`。
 
 例如本地开发环境：
 
 ```sh
-tail -f ~/.kuaimai-agent/code/instances/351fe5bd4282ac2f/service.log
+tail -f ~/.kuaimai-agent/code/instances/shared/service.log
 ```
 
 `time` 是 UTC ISO 时间，`pid`、`version` 标识运行进程；请求和连接另带 `instanceId`。HTTP 响应头 `X-Km-Request-Id` 与日志的 `requestId` 对应，可用于定位一次请求。

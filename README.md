@@ -7,10 +7,10 @@
 在绫通快麦多维表格网页选择 ChatGPT / Codex 或千问办公，点击“复制连接请求”，交给本地 Agent 执行：
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.4.0 connect --request '<网页自动生成的请求>'
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" connect --request '<网页自动生成的请求>'
 ```
 
-命令安装或复用当前用户目录中的固定版本，启动独立后台进程，并将实际端口返回原网页。无需选择项目目录、填写端口或配对码。在原页面直接连接，无需弹窗、回调页或保留连接窗口；接入请求有效期 30 分钟。
+`CONNECTOR_VERSION` 使用网页复制文案中的 npm 版本。命令安装或复用当前用户目录中的对应版本，启动或复用共享后台进程，并将实际端口返回原网页。HTTP 开发页与 HTTPS 正式页可共用进程和端口，每个网页来源各自领取授权。无需选择项目目录、填写端口或配对码。接入请求自生成起 10 小时内有效。
 
 - 不安装 macOS App，不创建登录启动项，不修改原 Agent 的模型和工具审批设置。
 - 首选端口 17653 占用时在 17653–17684 内自动选择可用端口，网页自动发现，不终止占用进程。
@@ -30,13 +30,13 @@ npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.4.0 co
 ## 服务管理
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.4.0 status --origin https://app.ltpass.com
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@0.4.0 stop --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" status --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" stop --origin https://app.ltpass.com
 ```
 
-以实际网页来源替换示例。代码保存在 `~/.kuaimai-agent/code/npm/`，运行信息与日志位于 `~/.kuaimai-agent/code/instances/`。运行文件包含本机凭据，不应上传或公开。
+以实际网页来源替换示例。代码按版本保存在 `~/.kuaimai-agent/code/npm/`，共享后台的运行信息与日志位于 `~/.kuaimai-agent/code/instances/shared/`。运行文件包含本机凭据，不应上传或公开。
 
-从 0.3.3 起，桥接服务进程名为 `kuaimai-agent-connector`，可在 macOS「活动监视器」中搜索该名称，并用 `status` 返回的 PID 区分不同网站的实例。已有旧版实例在执行新版连接请求时自动升级并重启，随后显示新名称。
+可在 macOS「活动监视器」中搜索 `kuaimai-agent-connector`。共享后台的 `status` 返回同一个 PID、实际运行版本及已登记的 `origins`。`stop --origin` 撤销指定来源的授权，移除最后一个来源时停止进程。旧版的按来源进程可用其对应版本的命令管理。
 
 0.4.0 增加[运行日志与自动轮转](docs/LOGGING.md)：记录服务启动/停止、网页授权、实时连接断开、请求状态码与耗时，以及脱敏后的错误诊断。后台 `status` 的 `logging` 字段给出日志路径、轮转限制和写入失败次数。
 

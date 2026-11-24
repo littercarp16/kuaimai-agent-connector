@@ -3,6 +3,10 @@ import { promisify } from 'node:util';
 import { discoverCodexDaemon } from '../adapters/codex/codex-rpc.mjs';
 
 const APP_PROCESS = '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT';
+// Current desktop builds move app-server I/O into a direct Node utility child.
+// Do not treat arbitrary descendants, renderers or unrelated Node processes as
+// desktop transports just because they connect to the same daemon.
+const NODE_HELPER = /^\/Applications\/ChatGPT\.app\/Contents\/Frameworks\/Codex Framework\.framework\/Versions\/[^/]+\/Helpers\/Codex \(Aperitif\)\.app\/Contents\/MacOS\/Codex \(Aperitif\)$/;
 const exec = promisify(execFile);
 const unknown = desktopPid => ({ mode: 'unknown', desktopPid });
 
@@ -55,18 +59,25 @@ export async function inspectCodexDesktopTransport({ run = exec, discover = disc
     if (desktops.length !== 1) return unknown();
     desktopPid = desktops[0].pid;
     const candidates = all.filter(p => p.executable.endsWith('/codex'));
+    const helpers = all.filter(p => p.parent === desktopPid && NODE_HELPER.test(p.executable));
     if (!candidates.length || candidates.length > 128) return unknown(desktopPid);
+    if (helpers.length > 16) return unknown(desktopPid);
     const [daemon, argumentResult, files] = await Promise.all([
       discover(),
-      command('/bin/ps', ['-ww', '-p', candidates.map(p => p.pid).join(','), '-o', 'pid=,args=']),
-      command('/usr/sbin/lsof', ['-nP', '-a', '-p', [desktopPid, ...candidates.map(p => p.pid)].join(','), '-U', '-Fpuftdn0']),
+      command('/bin/ps', ['-ww', '-p', [...candidates, ...helpers].map(p => p.pid).join(','), '-o', 'pid=,args=']),
+      command('/usr/sbin/lsof', ['-nP', '-a', '-p', [desktopPid, ...candidates.map(p => p.pid), ...helpers.map(p => p.pid)].join(','), '-U', '-Fpuftdn0']),
     ]);
     const args = new Map(argumentResult.stdout.split('\n').flatMap(line => {
       const match = /^\s*(\d+)\s+(.+)$/.exec(line);
       return match ? [[Number(match[1]), match[2]]] : [];
     }));
+    const peers = [desktops[0], ...helpers.filter(p => {
+      const value = args.get(p.pid);
+      return value?.startsWith(p.executable + ' ') && /(?:^|\s)--type=utility(?:\s|$)/.test(value)
+        && /(?:^|\s)--utility-sub-type=node\.mojom\.NodeService(?:\s|$)/.test(value);
+    })];
     const descriptors = sockets(files.stdout).filter(f => f.uid === uid);
-    const desktop = descriptors.filter(f => f.pid === desktopPid);
+    const desktop = descriptors.filter(f => peers.some(p => p.pid === f.pid));
     const servers = candidates.map(p => ({ ...p, mode: appServerMode(p, args.get(p.pid)) }));
     const otherUnixServer = servers.find(p => p.mode === 'unix' && descriptors.some(f =>
       f.pid === p.pid && f.name?.startsWith('/') && (!daemon.ready || f.name !== daemon.socketPath)
@@ -74,12 +85,12 @@ export async function inspectCodexDesktopTransport({ run = exec, discover = disc
     if (otherUnixServer) return unknown(desktopPid);
     const sharedServer = daemon.ready && servers.find(p => p.mode === 'unix' && descriptors.some(f =>
       f.pid === p.pid && f.name === daemon.socketPath && desktop.some(d => d.name === '->' + f.address)));
-    const stdioServer = servers.find(p => p.parent === desktopPid && p.mode === 'stdio' && ['0', '1'].every(fd =>
+    const stdioServer = servers.find(p => peers.some(d => d.pid === p.parent) && p.mode === 'stdio' && ['0', '1'].every(fd =>
       descriptors.some(f => f.pid === p.pid && f.fd === fd && desktop.some(d =>
-        d.name === '->' + f.address && f.name === '->' + d.address))));
+        d.pid === p.parent && d.name === '->' + f.address && f.name === '->' + d.address))));
     // Recheck identity after the process/socket snapshot; a launch race is not a reason to quit.
     const latest = await readProcesses();
-    if (![desktops[0], sharedServer, stdioServer].filter(Boolean).every(p => latest.some(n =>
+    if (![...peers, sharedServer, stdioServer].filter(Boolean).every(p => latest.some(n =>
       n.pid === p.pid && n.uid === p.uid && n.parent === p.parent && n.executable === p.executable))) return unknown(desktopPid);
     if (sharedServer && !stdioServer) {
       const current = await discover();
