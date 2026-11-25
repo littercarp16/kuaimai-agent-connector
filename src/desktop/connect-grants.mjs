@@ -13,8 +13,9 @@ export function parseConnectURL(value, allowedOrigins) {
   const keys = ['origin', 'callback', 'state', 'challenge', 'browser'];
   if (keys.some(k => url.searchParams.getAll(k).length !== 1) || [...url.searchParams.keys()].some(k => ![...keys, 'transport', 'provider'].includes(k))) bad();
   if (url.searchParams.has('transport') && (url.searchParams.getAll('transport').length !== 1 || url.searchParams.get('transport') !== 'direct')) bad();
-  if (url.searchParams.has('provider') && (url.searchParams.getAll('provider').length !== 1 || !['codex', 'qwen'].includes(url.searchParams.get('provider')))) bad();
+  if (url.searchParams.has('provider') && (url.searchParams.getAll('provider').length !== 1 || !['codex', 'qwen', 'workbuddy'].includes(url.searchParams.get('provider')))) bad();
   const request = Object.fromEntries(url.searchParams);
+  if (request.provider === 'workbuddy' && request.transport !== 'direct') bad();
   if (!validWebOrigin(request.origin) || !allowedOrigins.includes(request.origin) || !code.test(request.state) || !code.test(request.challenge)) bad();
   const callback = new URL(request.callback);
   if (callback.origin !== request.origin || callback.pathname !== '/agent/connect-callback.html' || callback.search || callback.hash || callback.username || callback.password) bad();

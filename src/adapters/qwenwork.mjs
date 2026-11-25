@@ -126,6 +126,17 @@ export function createQwenWorkAdapter({ sessionId: fixedSessionId, controlDir = 
     if (session?.session_id !== sessionId) throw Error('千问办公会话未找到');
     return describe(session);
   }
+  async function createSharedSession(_parent, { assertCurrent = () => {} } = {}) {
+    if (fixedSessionId || !canSubmit) throw Error('当前千问办公来源不支持新建可输入会话');
+    const client = await connectQwenDesktop(controlDir);
+    assertCurrent();
+    const created = await client.call('session.create', { title: '绫通网页协作', workspace_mode: 'general' });
+    const id = created.session?.session_id ?? created.session_id;
+    if (!isSessionId(id)) throw Error('千问办公未返回新会话标识');
+    const session = describe({ session_id: id, title: created.session?.title || '绫通网页协作' });
+    listed.set(session.id, id);
+    return session;
+  }
   async function readState(client, sessionId) {
     const params = { session_id: sessionId };
     const [history, current] = await Promise.all([
@@ -371,9 +382,10 @@ export function createQwenWorkAdapter({ sessionId: fixedSessionId, controlDir = 
   }
   let watchSequence = 0;
   return {
-    descriptor, health, bindSession, readShared, watch, sendShared, listApprovals, respondApproval,
+    descriptor, health, bindSession, createSharedSession, readShared, watch, sendShared, listApprovals, respondApproval,
     capabilities: {
       get submitPrompt() { return canSubmit; },
+      get newSession() { return !fixedSessionId && canSubmit; },
       get nativeApprovals() { return canRespond; },
       pageContext: true,
       attachments: false, publishUI: false, uiCommands: false, uiReceipts: false

@@ -23,7 +23,7 @@ const fail=(status,message)=>{throw new Failure(status,message);};
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
 const equal=(a,b)=>{const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y);};
 
-export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'],pairCode=String(randomInt(100000,1000000)),onPairCode=()=>{},publisherKey=randomBytes(32).toString('base64url'),publisherCommand=null,onBindings=()=>{},autoTrust=null,now=Date.now,enableWorkBuddy=false,workBuddyOptions={},enableMultiAgentFollow=false,codexDesktop=null,qwenDesktop=null,desktopConnect=null,projectIndependentSessions=false,logger=nullLogger}={}) {
+export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'],pairCode=String(randomInt(100000,1000000)),onPairCode=()=>{},publisherKey=randomBytes(32).toString('base64url'),publisherCommand=null,onBindings=()=>{},autoTrust=null,now=Date.now,enableWorkBuddy=false,workBuddyOptions={},enableMultiAgentFollow=false,codexDesktop=null,qwenDesktop=null,workBuddyServeManager=null,desktopConnect=null,projectIndependentSessions=false,manualSessionSelection=projectIndependentSessions,logger=nullLogger}={}) {
   if(!adapter?.health)throw Error('需要 Agent 适配器');
   const origins=new Set();for(const origin of allowedOrigins)allowOrigin(origin);
   if(autoTrust&&(!origins.has(autoTrust.origin)||!/^http:\/\/127\.0\.0\.1:\d+$/.test(autoTrust.origin)||autoTrust.sessionId!=null&&!/^ses[\w-]+$/.test(autoTrust.sessionId)))throw Error('自动授权必须指定受信loopback来源及有效会话');
@@ -34,8 +34,9 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   function connected(client) { client.logId=randomUUID(); logger.info('client.connected',{instanceId,clientId:client.logId,origin:client.websiteOrigin||client.origin}); }
   function disconnected(client,reason) { if(client.logDisconnected)return;client.logDisconnected=true;logger.info('client.disconnected',{instanceId,clientId:client.logId,origin:client.websiteOrigin||client.origin,reason}); }
   const workBuddy=enableWorkBuddy?createWorkBuddyStore({...workBuddyOptions,...(enableMultiAgentFollow?{workspaceId:workBuddyOptions.workspaceId||'ws_'+createHash('sha256').update(process.cwd()).digest('hex')}:{ }),instanceId,publisherKey,now,onOpen:candidate=>{if(enableMultiAgentFollow)follow.offer({...candidate,reason:'task-open'});},onChange:()=>{for(const client of clients.values())if(client.active){push(client);follow.tick(client);}}}):null;
-  const isWorkBuddy=client=>client.hub?.session.provider==='workbuddy';
-  const publicHealth=(origin)=>({service:'kuaimai-agent-connector',protocolVersion:2,interactionProtocol:PROTOCOL,instanceId,mode:'shared',agent,adapter:adapter.descriptor||{id:'opencode',status:'native'},capabilities:{projectIndependentSessions,qwenDesktopPreparation:Boolean(qwenDesktop),codexDesktopRestart:Boolean(codexDesktop),codexDesktopDockPersistence:codexDesktop?.capabilities?.dockPersistence===true,multiAgentFollow:enableMultiAgentFollow,autoHandshake:Boolean(autoTrust&&autoTrust.origin===origin),workbuddyPublish:Boolean(workBuddy),newSession:typeof adapter.createSharedSession==='function',workspaceFiles:typeof adapter.searchWorkspaceFiles==='function',attachments:typeof adapter.sendShared==='function',nativeQuestions:typeof adapter.listQuestions==='function'&&typeof adapter.replyQuestion==='function'&&typeof adapter.rejectQuestion==='function',followSessions:typeof adapter.watchRelevantSessions==='function',toolDetails:true,toolDetailFetch:typeof adapter.readToolDetail==='function',uiCommands:true,uiReceipts:true,demo:true,submitPrompt:agent.ready&&(typeof adapter.sendShared==='function'||typeof adapter.send==='function'),sharedSession:typeof adapter.bindSession==='function',nativeEvents:typeof adapter.watch==='function',cancelRun:typeof adapter.interruptShared==='function'||typeof adapter.interrupt==='function',previewArtifacts:true,businessWrite:false}});
+  const isWorkBuddyTask=hub=>hub?.session.provider==='workbuddy'&&hub.session.source?.nativeSession===false;
+  const isWorkBuddy=client=>isWorkBuddyTask(client.hub);
+  const publicHealth=(origin)=>({service:'kuaimai-agent-connector',protocolVersion:2,interactionProtocol:PROTOCOL,instanceId,mode:'shared',agent,adapter:adapter.descriptor||{id:'opencode',status:'native'},capabilities:{projectIndependentSessions,qwenDesktopPreparation:Boolean(qwenDesktop),workBuddyDesktopPreparation:Boolean(workBuddyServeManager),workBuddyWebStart:Boolean(workBuddyServeManager),codexDesktopRestart:Boolean(codexDesktop),codexDesktopDockPersistence:codexDesktop?.capabilities?.dockPersistence===true,multiAgentFollow:enableMultiAgentFollow,autoHandshake:Boolean(autoTrust&&autoTrust.origin===origin),workbuddyPublish:Boolean(workBuddy),newSession:typeof adapter.createSharedSession==='function',workspaceFiles:typeof adapter.searchWorkspaceFiles==='function',attachments:typeof adapter.sendShared==='function',nativeQuestions:typeof adapter.listQuestions==='function'&&typeof adapter.replyQuestion==='function'&&typeof adapter.rejectQuestion==='function',followSessions:typeof adapter.watchRelevantSessions==='function',toolDetails:true,toolDetailFetch:typeof adapter.readToolDetail==='function',uiCommands:true,uiReceipts:true,demo:true,submitPrompt:agent.ready&&(typeof adapter.sendShared==='function'||typeof adapter.send==='function'),sharedSession:typeof adapter.bindSession==='function',nativeEvents:typeof adapter.watch==='function',cancelRun:typeof adapter.interruptShared==='function'||typeof adapter.interrupt==='function',previewArtifacts:true,businessWrite:false}});
   async function checkHealth(){if(healthPromise)return healthPromise;if(healthAt&&now()-healthAt<5000)return agent;healthPromise=Promise.resolve().then(()=>adapter.health()).then(value=>{agent={ready:value.ready===true,version:typeof value.version==='string'?value.version:null,message:String(value.message||'').slice(0,180)};healthAt=now();return agent;}).catch(error=>{logger.error('agent.health_failed',{instanceId,error});agent={ready:false,version:null,message:'OpenCode 状态检查失败'};return agent;}).finally(()=>{healthPromise=null;});return healthPromise;}
   const nativeFor=client=>client.hub?.adapter||adapter;
   const agentFor=client=>adapter.agentFor&&client.hub?adapter.agentFor(nativeFor(client)):agent;
@@ -44,7 +45,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   function push(client){client.revision++;const data='event: snapshot\ndata: '+JSON.stringify(snapshot(client))+'\n\n';for(const res of client.streams){if(res.writableLength>512*1024){res.destroy();continue;}res.write(data);}}
   function rate(key,limit){const value=rates.get(key);if(!value||now()-value.start>=60000){rates.set(key,{start:now(),count:1});return;}if(++value.count>limit)fail(429,'请求过于频繁，请稍后重试');}
   function changedBindings(){onBindings([...hubs.values()].filter(h=>h.members.size).map(h=>({id:h.session.id,title:h.session.title,...(h.session.provider?{provider:h.session.provider}:{} ),...(enableMultiAgentFollow?{subscribed:true,selected:[...h.members].some(c=>c.active&&c.hub===h)}:{})})));follow.reconcile();}
-  const sourceBusy=hub=>hub.inflightWrites>0||['queued','running','stopping','unknown'].includes(hub.projection.value.status)||hub.projection.value.questions?.length||hub.projection.value.approvals?.length;
+  const sourceBusy=(hub,ownWrites=0)=>hub.inflightWrites>ownWrites||['queued','running','stopping','unknown'].includes(hub.projection.value.status)||hub.projection.value.questions?.length||hub.projection.value.approvals?.length;
   function restartDesktop(input,assertAuthorized=()=>{}) {
     if(!codexDesktop)fail(404,'桌面端切换未启用');
     if(input.instanceId!==instanceId)fail(409,'连接器实例已变化，请重新连接');
@@ -56,12 +57,19 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         throw new CodexDesktopFailure(409,'已绑定的 Codex 会话仍在执行、等待答复或状态未知，请处理完成后再切换桌面端');
     }});
   }
-  function eviction(client,targetId){return [...(client.subscriptions||[])].find(([id,hub])=>id!==targetId&&(!sourceBusy(hub)||hub.session.provider==='workbuddy'))?.[1];}
+  function eviction(client,targetId){return [...(client.subscriptions||[])].find(([id,hub])=>id!==targetId&&(!sourceBusy(hub)||isWorkBuddyTask(hub)))?.[1];}
   function canSwitch(client,target){return !enableMultiAgentFollow||client.subscriptions?.has(target.id)||!client.subscriptions||client.subscriptions.size<8||Boolean(eviction(client,target.id));}
   function retireHub(hub){const job=hub.close();cleanups.add(job);job.then(()=>cleanups.delete(job),()=>cleanups.delete(job));return job;}
   async function release(client,hub){if(!hub)return;hub.remove(client);hub.pending?.delete(client);if(!hub.members.size&&!hub.pending?.size){if(hubs.get(hub.session.id)===hub)hubs.delete(hub.session.id);await retireHub(hub);}}
   async function detach(client){const attached=new Set([client.hub,client.pendingHub,...(client.subscriptions?.values()||[])].filter(Boolean));client.hub=null;client.pendingHub=null;client.subscriptions?.clear();client.canControl=false;const jobs=[...attached].map(hub=>release(client,hub));changedBindings();await Promise.all(jobs);}
   function revokeExpired(){for(const[token,client]of clients)if(client.expires<now()){disconnected(client,'expired');client.active=false;clients.delete(token);for(const stream of client.streams)stream.end();follow.reconcile();void detach(client).catch(()=>{});}}
+  function requireWorkBuddyLogin(error,client){
+    if(error?.code!=='WORKBUDDY_AUTH_REQUIRED'||!workBuddyServeManager?.authenticate)return;
+    workBuddyServeManager.authenticate(()=>{
+      if(closed||!client.active||client.expires<now())fail(401,'WorkBuddy 登录授权已失效');
+    });
+    fail(428,'请完成 WorkBuddy CLI 官方登录，再继续当前会话操作');
+  }
   async function bind(client,input,{isCurrent=()=>true}={}){
     const wb=workBuddy?.has(input.sessionId)===true;
     let native=adapter;if(!wb&&adapter.forSession){try{native=adapter.forSession(input.sessionId);}catch{fail(404,'该原生来源未知或不可用，不回退到其他Agent');}}
@@ -77,7 +85,10 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     try{
     const sourceHealth=!wb&&adapter.healthFor?await adapter.healthFor(native):null;
     if(native.descriptor?.id==='qwen'&&input.allowControl&&!nativeCapabilities(native,sourceHealth||await native.health()).submitPrompt)fail(409,'千问办公当前未开放网页发送');
-    const session=wb?workBuddy.hub(input.sessionId).session:await native.bindSession(input.sessionId);if(!authorized())fail(401,'授权已失效');
+    let session;
+    try { session=wb?workBuddy.hub(input.sessionId).session:await native.bindSession(input.sessionId); }
+    catch(error){if(native.descriptor?.id==='workbuddy'&&error.code==='WORKBUDDY_SESSION_GONE')fail(409,'所选 WorkBuddy 会话已不可用，请刷新列表');throw error;}
+    if(!authorized())fail(401,'授权已失效');
     if(client.hub?.session.id===session.id){if(!input.allowControl)client.hub.cancelControl?.(client);client.canControl=input.allowControl;push(client);return snapshot(client);}
     let hub=hubs.get(session.id);
     if(!hub&&wb){hub=workBuddy.hub(session.id);hubs.set(session.id,hub);}
@@ -94,6 +105,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(client.pendingHub===hub)client.pendingHub=null;
       await release(client,hub);
       const provider=native.descriptor?.id;
+      if(provider==='workbuddy'&&authorized())requireWorkBuddyLogin(error,client);
       if(provider==='codex'&&error?.code==='CODEX_THREAD_IN_USE'){
         fail(409,'该 Codex 会话仍在另一个客户端打开。请在那里关闭这条会话，在 TUI 续接后再绑定。');
       }
@@ -104,7 +116,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     const previous=client.hub;
     if(enableMultiAgentFollow){client.subscriptions||=new Map();if(!client.subscriptions.has(session.id)&&client.subscriptions.size>=8){const stale=eviction(client,session.id);if(!stale){client.pendingHub=null;await release(client,hub);fail(409,'已授权来源仍在执行，切换暂缓');}client.subscriptions.delete(stale.session.id);void release(client,stale).catch(()=>{});}client.subscriptions.set(session.id,hub);}
     if(previous&&previous!==hub)previous.cancelControl?.(client);
-    client.pendingHub=null;hub.pending.delete(client);client.hub=hub;client.canControl=input.allowControl;hub.members.add(client);client.sessionId=null;client.run=null;if(previous&&previous!==hub&&(!enableMultiAgentFollow||previous.session.provider==='workbuddy')){client.subscriptions?.delete(previous.session.id);await release(client,previous);}changedBindings();push(client);return snapshot(client);
+    client.pendingHub=null;hub.pending.delete(client);client.hub=hub;client.canControl=input.allowControl;hub.members.add(client);client.sessionId=null;client.run=null;if(previous&&previous!==hub&&(!enableMultiAgentFollow||isWorkBuddyTask(previous))){client.subscriptions?.delete(previous.session.id);await release(client,previous);}changedBindings();push(client);return snapshot(client);
     }finally{client.bindingBusy=false;follow.tick(client);}
   }
   function authenticate(req,origin){const token=req.headers.authorization?.replace(/^Bearer /,'');const client=token&&clients.get(token);if(!client||!client.active||client.origin!==origin||client.expires<now())fail(401,'连接授权已失效，请重新配对');return client;}
@@ -196,7 +208,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     }
     return receipt;
   }
-  follow=createFollowManager({adapter,autoTrust,clients:()=>clients.values(),bind,push,now,enableMultiAgentFollow,workBuddy:Boolean(workBuddy),canSwitch});
+  follow=createFollowManager({adapter,autoTrust,clients:()=>clients.values(),bind,push,now,enableMultiAgentFollow,workBuddy:Boolean(workBuddy),manualSelection:manualSessionSelection,canSwitch});
   const server=http.createServer(async(req,res)=>{
     const requestLog=observeRequest(req,res,{logger,instanceId,origins});
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
@@ -228,7 +240,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(['/v1/local/publish','/v1/local/receipt'].includes(req.url)){
         if(req.method!=='POST'||origin||!equal(req.headers['x-km-publisher']||'',publisherKey))fail(403,'只接受已授权的本机Agent发布');
         rate('local-publisher',240);const input=await body(req,['sessionId','event','eventId']),hub=hubs.get(input.sessionId);
-        if(workBuddy?.has(input.sessionId)||hub?.session.provider==='workbuddy')fail(403,'WorkBuddy 只接受任务专属发布和回执授权');
+        if(workBuddy?.has(input.sessionId)||isWorkBuddyTask(hub))fail(403,'WorkBuddy 只接受任务专属发布和回执授权');
         if(!hub||!hub.members.size)fail(404,'该会话尚未被网页绑定，请先在前端选择会话');
         if(hub.adapter.capabilities?.publishUI===false)fail(403,'此会话只同步原生消息');
         if(req.url==='/v1/local/receipt')return json(res,200,{ok:true,data:hub.receipts.get(input.eventId)||{eventId:input.eventId,status:'unknown'}});
@@ -337,8 +349,78 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         let receipt;try{receipt=await originalHub.answerQuestion(client,input,{reject,assertCurrent});}catch(error){assertCurrent();if(error instanceof Failure)throw error;fail(409,'原生问题提交未获确认，可能已结束；不会作为聊天发送或自动重试，请核验原生会话');}assertCurrent();return json(res,200,{ok:true,data:receipt});
       }
       if(['/v1/files/search','/v1/session/new'].includes(req.url)&&req.method==='POST'){
+        const originalHub=client.hub,native=nativeFor(client),epoch=client.bindingEpoch,input=await body(req,req.url==='/v1/files/search'?['sessionId','query']:['sessionId','requestId','provider','instanceId','allowControl','operation']);
+        if(req.url==='/v1/session/new'&&['codex','qwen','workbuddy'].includes(input.provider)){
+          const provider=input.provider, wb=provider==='workbuddy';
+          const selected=adapter.forProvider?.(provider) || (adapter.descriptor?.id===provider ? adapter : null);
+          if(Object.hasOwn(input,'sessionId'))fail(400,'新建会话请求字段不符合约定');
+          if(wb&&!workBuddyServeManager)fail(404,'当前连接器未启用网页准备 WorkBuddy');
+          if(!wb&&(!projectIndependentSessions||!selected?.createSharedSession||!Object.hasOwn(input,'requestId')||input.allowControl!==true||Object.hasOwn(input,'operation')))fail(409,'当前来源不支持此新建会话请求');
+          if(input.instanceId!==instanceId)fail(409,'连接器实例已变化，请重新连接');
+          const assertAllowed=()=>{if(closed||!client.active||client.expires<now())fail(401,'网页授权已失效');};
+          if(Object.hasOwn(input,'operation')){
+            const recovery=input.operation==='reopenLogin';
+            if(!['authenticate','ensureLogin','reopenLogin'].includes(input.operation)||Object.hasOwn(input,'allowControl')||
+              (recovery ? typeof input.requestId!=='string'||!/^[-\da-f]{36}$/i.test(input.requestId) : Object.hasOwn(input,'requestId')))fail(400,'WorkBuddy CLI 登录参数无效');
+            if(!workBuddyServeManager.authenticate||!['ready','authenticating','failed'].includes(workBuddyServeManager.status().phase))fail(409,'请先连接 WorkBuddy CLI');
+            rate(origin+':workbuddy-login',6);
+            // Older pages use authenticate for both the first click and recovery.
+            await workBuddyServeManager.authenticate(assertAllowed, { reopen:input.operation!=='ensureLogin', attemptId:input.requestId });
+            return json(res,202,{ok:true,data:workBuddyServeManager.status()});
+          }
+          if(Object.hasOwn(input,'requestId')){
+            if(wb&&typeof workBuddyServeManager.createAndBind!=='function')fail(409,'请更新本机连接器以创建 CLI 会话');
+            if(typeof input.allowControl!=='boolean'||typeof input.requestId!=='string'||!/^[-\da-f]{36}$/i.test(input.requestId))fail(400,'请确认新建会话的输入权限和请求标识');
+            client.creations||=new Map();
+            let operation=client.creations.get(input.requestId);
+            if(operation){
+              if(operation.source!==provider||operation.allowControl!==input.allowControl)fail(409,'请求标识已用于其他操作');
+            }else{
+              if(wb&&workBuddyServeManager.status().phase!=='ready')fail(409,'请先完成 WorkBuddy CLI 连接');
+              if(client.bindingBusy||client.newSessionBusy||originalHub&&sourceBusy(originalHub,writingHub===originalHub?1:0))fail(409,'请等待当前会话操作结束');
+              rate(origin+':'+provider+'-create',20);
+              client.newSessionBusy=true;
+              follow.pin(client);
+              operation={source:provider,allowControl:input.allowControl};
+              const assertCurrent=()=>{
+                assertAllowed();
+                if(client.hub!==originalHub||client.bindingEpoch!==epoch)fail(409,'来源已变化，请重新选择会话');
+              };
+              const bindCreated=async session=>{
+                assertCurrent();
+                if(!wb && adapter.forSession && adapter.forSession(session.id)!==selected)fail(409,'新会话来源不一致');
+                await bind(client,{sessionId:session.id,allowControl:input.allowControl});
+              };
+              operation.promise=Promise.resolve().then(async()=>{
+                assertCurrent();
+                if(wb)return workBuddyServeManager.createAndBind(bindCreated);
+                const caps=nativeCapabilities(selected,await selected.health());
+                if(!caps.submitPrompt||!caps.newSession)fail(409,'所选 Agent 尚未就绪或当前来源不支持新建可输入会话');
+                assertCurrent();
+                const session=await selected.createSharedSession(undefined,{assertCurrent});
+                await bindCreated(session);
+                return session;
+              }).catch(error=>{
+                if(wb&&error?.code==='WORKBUDDY_AUTH_REQUIRED'){
+                  client.creations.delete(input.requestId);
+                  requireWorkBuddyLogin(error,client);
+                }
+                throw error;
+              }).finally(()=>{client.newSessionBusy=false;});
+              client.creations.set(input.requestId,operation);
+              while(client.creations.size>20)client.creations.delete(client.creations.keys().next().value);
+            }
+            const created=await operation.promise;
+            assertAllowed();
+            if(client.hub?.session.id!==created.id)fail(409,'新会话已创建，但当前绑定已变化，请重新选择会话');
+            return json(res,200,{ok:true,data:{...snapshot(client),createdSessionId:created.id}});
+          }
+          if(Object.hasOwn(input,'allowControl'))fail(400,'准备服务不接受会话输入权限');
+          rate(origin+':workbuddy-prepare',20);
+          return json(res,202,{ok:true,data:workBuddyServeManager.ensure({assertAllowed})});
+        }
+        if(Object.hasOwn(input,'provider')||Object.hasOwn(input,'instanceId')||Object.hasOwn(input,'allowControl')||Object.hasOwn(input,'operation'))fail(400,'请求字段不符合约定');
         if(isWorkBuddy(client))fail(409,'WorkBuddy 协作来源不提供原生会话或工作区文件操作');
-        const originalHub=client.hub,native=nativeFor(client),epoch=client.bindingEpoch,input=await body(req,req.url==='/v1/files/search'?['sessionId','query']:['sessionId','requestId']);
         const current=()=>Boolean(originalHub)&&client.active&&client.expires>=now()&&client.hub===originalHub&&client.bindingEpoch===epoch&&input.sessionId===originalHub.session.id;
         if(req.url==='/v1/files/search'){if(!current())fail(409,'搜索所属会话已变化');if(!capabilities(client).workspaceFiles||!native.searchWorkspaceFiles)fail(409,'该适配器未提供工作区文件搜索');let files;try{files=await native.searchWorkspaceFiles(originalHub.session.id,input.query||'');}catch{fail(400,'工作区文件搜索失败或范围已变化');}if(!current())fail(409,'搜索所属会话已变化');return json(res,200,{ok:true,data:files});}
         if(typeof input.requestId!=='string'||!/^[-\da-f]{36}$/.test(input.requestId))fail(400,'请求标识无效');client.creations||=new Map();let operation=client.creations.get(input.requestId);
@@ -360,7 +442,21 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         if(!workBuddy&&!enableMultiAgentFollow){if(!adapter.listSessions)fail(503,'适配器不支持共享会话');return json(res,200,{ok:true,data:await adapter.listSessions()});}
         let primary=[],status='available';try{if(!adapter.listSessions)throw Error();primary=await adapter.listSessions();if(!Array.isArray(primary))throw Error();}catch(error){logger.error('agent.sessions_failed',{instanceId,requestId:requestLog.requestId,error});primary=[];status='unavailable';}
         const provider=adapter.descriptor?.id||'opencode',primarySource={provider,status,adapter:publicHealth().adapter,capabilities:publicHealth().capabilities,...(status==='unavailable'?{message:'原生会话列表暂不可用；未将失败表示为空列表成功。'}:{})};
-        const sources=[...(adapter.sourceDiagnostics?.()||[primarySource]),...(workBuddy?[{provider:'workbuddy',status:'available',adapter:WORKBUDDY_ADAPTER,capabilities:WORKBUDDY_CAPABILITIES}]:[])],sessions=[...primary.map(s=>({...s,provider:s.provider||provider,status:hubs.get(s.id)?.projection.value.status||s.status||'unknown',adapter:s.adapter||publicHealth().adapter,capabilities:s.capabilities||publicHealth().capabilities})),...(workBuddy?.list()||[])];
+        const sources=[...(adapter.sourceDiagnostics?.()||[primarySource]),...(workBuddy?[{provider:'workbuddy',status:'available',adapter:WORKBUDDY_ADAPTER,capabilities:WORKBUDDY_CAPABILITIES}]:[])];
+        if(projectIndependentSessions){
+          for(const source of sources){
+            if(['codex','qwen'].includes(source.provider))source.sessionCreation=source.status==='available'&&source.capabilities?.newSession===true&&source.capabilities?.submitPrompt===true;
+          }
+        }
+        if(workBuddyServeManager){
+          const source=sources.find(item=>item.provider==='workbuddy'&&item.adapter?.status==='native');
+          if(source){
+            source.preparation=workBuddyServeManager.readPreparation ? await workBuddyServeManager.readPreparation() : workBuddyServeManager.status();
+            source.cliSessionCreation=typeof workBuddyServeManager.createAndBind==='function';
+            source.cliLogin=typeof workBuddyServeManager.authenticate==='function';
+          }
+        }
+        const sessions=[...primary.map(s=>({...s,provider:s.provider||provider,status:hubs.get(s.id)?.projection.value.status||s.status||'unknown',adapter:s.adapter||publicHealth().adapter,capabilities:s.capabilities||publicHealth().capabilities})),...(workBuddy?.list()||[])];
         return json(res,200,{ok:true,data:req.url==='/v1/sources'?{sessions,sources}:sessions,...(req.url==='/v1/sessions'?{sources}:{})});
       }
       if(req.url==='/v1/bind'&&req.method==='POST'){const input=await body(req,['sessionId','allowControl']);if(workBuddy?.has(input.sessionId)&&input.allowControl===true)fail(403,'WorkBuddy 仅支持协作上报，网页不能控制客户端');follow.pin(client);return json(res,200,{ok:true,data:await bind(client,input)});}

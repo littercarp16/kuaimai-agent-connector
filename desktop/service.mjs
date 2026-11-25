@@ -3,11 +3,17 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
 import { createDesktopHost } from '../src/desktop/host.mjs';
+import { workBuddySessionOptions } from '../src/adapters/workbuddy/session-list.mjs';
+import { createWorkBuddyServeManager } from '../src/runtime/workbuddy-serve.mjs';
 process.title = 'kuaimai-agent-connector';
 const directory = process.env.KM_AGENT_APP_DATA_DIR || join(homedir(), 'Library', 'Application Support', 'Kuaimai Agent Connector');
 if (!isAbsolute(directory)) throw Error('App data directory must be absolute');
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
-const host = createDesktopHost({ directory, reconnect: true, onChange: status => emit({ event: 'status', data: status }) });
+const sessionOptions = workBuddySessionOptions();
+delete process.env.KM_AGENT_WORKBUDDY_PASSWORD;
+const workBuddyServeManager = sessionOptions ? null : createWorkBuddyServeManager({ directory });
+const host = createDesktopHost({ directory, reconnect: true, direct: true, workBuddyServeManager, sessionOptions,
+  onChange: status => emit({ event: 'status', data: status }) });
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let queue = Promise.resolve(), closing = false;
 input.on('line', line => {

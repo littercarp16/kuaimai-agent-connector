@@ -132,6 +132,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     try { result = await capture.rpc.request(method, params, { signal, timeoutMs: requestTimeoutMs }); }
     catch (error) {
       check(capture, context);
+      if (method === 'thread/turns/list' && error?.code === 'CODEX_EMPTY_HISTORY') return { data: [], nextCursor: null };
       throw err(['NOT_SUBMITTED', 'CODEX_RESULT_UNKNOWN', 'CODEX_THREAD_IN_USE'].includes(error?.code) ? error.code : 'CODEX_READ_FAILED');
     }
     check(capture, context); return result;
@@ -245,6 +246,16 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     }
     return [...result.values()];
   }
+  async function createSharedSession(_parent, { assertCurrent = () => {} } = {}) {
+    const capture = await ready(), cwd = await scope();
+    check(capture); assertCurrent();
+    if (bound.size >= 32) throw err('CODEX_READ_FAILED');
+    const { thread } = await request(capture, 'thread/start', { cwd, ephemeral: false, historyMode: 'paginated' });
+    if (!await inside(thread, capture, cwd)) throw err('CODEX_SCOPE_CHANGED');
+    const session = meta(thread, cwd);
+    registerThread(session.id, thread, cwd, capture, true);
+    return session;
+  }
   async function bindSession(id) {
     const nativeId = unwrap(id), capture = await ready(); check(capture);
     const response = await request(capture, 'thread/read', { threadId: nativeId, includeTurns: false }); check(capture);
@@ -256,15 +267,19 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     } else directoryScope = await scope();
     if (response?.thread?.id !== nativeId || !await inside(response.thread, capture, directoryScope)) throw err('CODEX_SCOPE_CHANGED');
     check(capture);
-    const old = bound.get(id); if (old && !old.invalid && old.capture === capture) return meta(response.thread, directoryScope);
+    return registerThread(id, response.thread, directoryScope, capture, false);
+  }
+  function registerThread(id, thread, directoryScope, capture, warm) {
+    check(capture);
+    const old = bound.get(id); if (old && !old.invalid && old.capture === capture) return meta(thread, directoryScope);
     if (bound.size >= 32) throw err('CODEX_READ_FAILED');
-    const context = { id, nativeId, scope: directoryScope, capture, watches: new Set(), pending: new Map(), wire: new Map(),
+    const context = { id, nativeId: thread.id, scope: directoryScope, capture, watches: new Set(), pending: new Map(), wire: new Map(),
       buffer: [], bufferBytes: 0, eventQueue: [], eventBytes: 0, eventsFlight: null,
-      warming: false, warm: false, warmFlight: null, invalid: false };
+      warming: false, warm, warmFlight: null, invalid: false };
     context.state = createCodexState({ sessionId: id, directory: directoryScope, now,
       makeEvent: (type, data) => makeEvent(capture, type, data), publish: event => publish(context, event) });
-    context.state.setModel(response.thread); bound.set(id, context);
-    return meta(response.thread, directoryScope);
+    context.state.setModel(thread); bound.set(id, context);
+    return meta(thread, directoryScope);
   }
   async function loadTurns(context, signal, initial, snapshotOrder = null) {
     const since = context.state.revision, capture = context.capture;
@@ -609,11 +624,11 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     }
   }
   const capabilities = Object.freeze({ send: true, interrupt: true, questions: true, approvals: true, toolDetails: true,
-    attachments: false, fileSearch: false, newSession: false, followSessions: false,
+    attachments: false, fileSearch: false, newSession: true, followSessions: false,
     get pageContext() { return !closed && current?.protocol?.pageContext === true; } });
   return {
     descriptor: Object.freeze({ id: 'codex', status: 'native', capabilities }), capabilities,
-    health, listSessions, bindSession, readShared, watch, sendShared, interruptShared, readToolDetail,
+    health, listSessions, createSharedSession, bindSession, readShared, watch, sendShared, interruptShared, readToolDetail,
     listQuestions: id => listPending(id, 'question'), listApprovals: id => listPending(id, 'approval'),
     replyQuestion: (id, qid, answers, options) => respondPending(id, qid, 'question', answers, options),
     rejectQuestion: (id, qid, options) => respondPending(id, qid, 'question', null, options, true),

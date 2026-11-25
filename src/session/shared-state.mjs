@@ -4,6 +4,7 @@ import{PROTOCOL,COMMANDS}from'../protocol/protocol.mjs';
 import{redactText}from'../tools/display-safety.mjs';
 const M=globalThis.KmAgentModel;
 const TERMINALS={'session.execution.succeeded':'completed','session.execution.failed':'failed','session.execution.interrupted':'interrupted'};
+const interruptionCode=(status,code)=>status==='interrupted'&&code==='workbuddy_unsupported_permission'?code:null;
 const clamp=(value,max=14000)=>String(value??'').slice(0,max);
 const fileMeta=files=>Array.isArray(files)?files.slice(0,5).map((f,i)=>({name:clamp(f?.name||'附件'+(i+1),180),mime:clamp(f?.mime||'',70)})):[];
 
@@ -70,8 +71,17 @@ export function createProjection(sessionId) {
     if(event.type==='session.reasoning.started'||event.type==='session.reasoning.ended'){activity({id:'thinking:'+d.assistantMessageID+':'+d.ordinal,messageId:d.assistantMessageID,kind:'thinking',status:event.type.endsWith('started')?'running':'completed',label:'思考',...(event.type.endsWith('started')&&Number.isFinite(event.created)?{startedAt:event.created}:{})});return true;}
     if(event.type==='session.text.delta'&&deferText)return true;
     if(event.type==='session.inbox.enqueued'&&d.item?.type==='user') {if(!remember(inputs,d.inboxID))return false;const m=message(d.inboxID,'user');m.text=clamp(d.item.payload?.text,4000);m.files=fileMeta(d.item.payload?.files);if(['idle','completed','interrupted','failed'].includes(value.status))value.status='queued';}
-    else if(event.type==='session.execution.started'){value.status='running';value.error=null;value.startedAt=event.created||Date.now();}
-    else if(TERMINALS[event.type]){value.status=TERMINALS[event.type];if(value.status==='failed')value.error='OpenCode本轮执行失败，请查看本地原因。';for(const a of activities.values())if(a.status==='running')activity({...a,status:value.status==='completed'?'completed':'failed'});}
+    else if(event.type==='session.execution.started'){value.status='running';value.error=null;value.interruptionCode=null;value.startedAt=event.created||Date.now();}
+    else if(TERMINALS[event.type]){
+      value.status=TERMINALS[event.type];
+      value.interruptionCode=interruptionCode(value.status,d.interruptionCode);
+      if(value.status==='failed'){
+        if(d.failureCode==='workbuddy_refusal')value.error='WorkBuddy CLI 拒绝了本轮请求（refusal）。';
+        else if(d.failureCode==='workbuddy_failed')value.error='WorkBuddy CLI 本轮执行失败。';
+        else value.error='OpenCode本轮执行失败，请查看本地原因。';
+      }
+      for(const a of activities.values())if(a.status==='running')activity({...a,status:value.status==='completed'?'completed':'failed'});
+    }
     else if(event.type==='session.text.started'){
       if(!d.assistantMessageID||!Number.isSafeInteger(d.ordinal))return false;parts.set(d.assistantMessageID+':'+d.ordinal,{id:d.assistantMessageID,ordinal:d.ordinal,text:''});
     }else if(['session.text.delta','session.text.updated','session.text.ended'].includes(event.type)){
@@ -135,7 +145,7 @@ export function createProjection(sessionId) {
     for(const m of snapshot.messages||[])if(m.role==='assistant')attachPublicContext(m.id,M.parseOutput(m.text).text.split(/\n\s*\n/)[0],'assistant-public-text');
     for(const a of snapshot.activities||[])if(['tool','skill'].includes(a.kind)&&a.summary)attachPublicContext(a.messageId,`${a.toolName||'工具'}：${a.summary}`,'tool-action');
     if(snapshot.timeline?.length){const keys=new Set(snapshot.timeline.map(x=>x.kind+':'+x.id));value.timeline=[...snapshot.timeline,...value.timeline.filter(x=>!keys.has(x.kind+':'+x.id))].slice(-140);}
-    value.status=snapshot.status||'idle';value.model=snapshot.model||null;refresh();
+    value.status=snapshot.status||'idle';value.interruptionCode=interruptionCode(value.status,snapshot.interruptionCode);value.model=snapshot.model||null;refresh();
   }
   function reconcileText(snapshot,keys){for(const m of snapshot.messages||[]){if(m.role!=='assistant')continue;let updated=false;for(const part of m.segments||[{ordinal:0,text:m.text}])if(keys.has(m.id+':'+part.ordinal)){parts.set(m.id+':'+part.ordinal,{id:m.id,...part,text:clamp(part.text,180000)});updated=true;}if(updated){const target=message(m.id,'assistant');target.text=[...parts.values()].filter(p=>p.id===m.id).sort((a,b)=>a.ordinal-b.ordinal).map(p=>p.text).join('\n').slice(0,180000);parseMessage(target.text,m.id);}}refresh();}
   return {value,accept,publish,hydrate,reconcileText,settleQuestion,clearQuestions,settleApproval,clearApprovals};

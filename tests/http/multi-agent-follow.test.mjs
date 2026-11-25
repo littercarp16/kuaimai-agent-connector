@@ -4,6 +4,7 @@ import {once} from 'node:events';
 import {randomUUID} from 'node:crypto';
 import {request as httpRequest} from 'node:http';
 import {createConnector} from '../../src/http/server.mjs';
+import {createNativeRegistry} from '../../src/adapters/native-registry.mjs';
 import{createSessionDiscovery}from'../../src/adapters/opencode/session-discovery.mjs';
 
 const origin='http://127.0.0.1:4173',key='multi-agent-test-publisher',workspaceId='ws_authorized';
@@ -31,6 +32,107 @@ async function fixture(t,options={}){
   const nativePublish=async(id,e)=>{const r=await fetch(base+'/v1/local/publish',{method:'POST',headers:{'X-Km-Agent':'1','Content-Type':'application/json','X-Km-Publisher':key},body:JSON.stringify({sessionId:id,event:e})});return{status:r.status,...await r.json()};};
   return{adapter,bridge,base,web,local,token,read,open,calls,bindings,watchers,handshake,nativePublish,offer:c=>offer(c),advance:ms=>{now+=ms;},expire:()=>{now+=9*3600e3;},emit:(id,type,data={})=>watchers.get(id)?.({id:randomUUID(),type,data:{sessionID:id,...data}}),scope:t=>({instanceId:t.instanceId,taskId:t.taskId})};
 }
+
+test('manual page selection stays unbound when native sessions or MCP tasks appear', async t => {
+  const f = await fixture(t, { projectIndependentSessions: true, autoTrust: { origin } });
+  await f.open();
+  await f.offer({ id: 'ses_other', provider: 'opencode', title: '另一条会话' });
+  const snapshot = await f.read();
+  assert.equal(snapshot.binding, null);
+  assert.equal(snapshot.routing.mode, 'pinned');
+  assert.deepEqual(f.calls.filter(([action]) => action === 'bind'), []);
+});
+
+for (const provider of ['codex', 'qwen']) test(provider + ' creates once for concurrent confirmations and rejects replay for another Agent', async t => {
+  const creations = [], sends = [];
+  let release, started;
+  const pending = new Promise(resolve => { release = resolve; });
+  const entered = new Promise(resolve => { started = resolve; });
+  function native(id) {
+    const session = { id: 'ses_' + id + '_' + 'a'.repeat(32), provider: id, title: '网页协作' };
+    return {
+      descriptor: { id, status: 'native' }, health: async () => ({ ready: true }), listSessions: async () => [],
+      async createSharedSession(_parent, { assertCurrent }) {
+        assertCurrent(); creations.push(id); started(); await pending; return session;
+      },
+      bindSession: async sessionId => { assert.equal(sessionId, session.id); return session; },
+      watch: () => ({ ready: Promise.resolve(), close() {} }),
+      readShared: async () => ({ status: 'completed', messages: [] }), sendShared: async () => { sends.push(id); },
+    };
+  }
+  const adapter = createNativeRegistry({ primary: native('codex'), additional: [native('qwen')] });
+  const f = await fixture(t, { adapter, autoTrust: { origin }, projectIndependentSessions: true });
+  const base = { provider, instanceId: (await f.read()).instanceId, requestId: randomUUID(), allowControl: true };
+  const create = patch => f.web('/v1/session/new', { ...base, ...patch }, f.token);
+  assert.equal((await create({ allowControl: false })).status, 409);
+  assert.equal((await create({ instanceId: 'obsolete' })).status, 409);
+  assert.deepEqual(creations, []);
+  const first = create({});
+  await entered;
+  const second = create({});
+  try {
+    assert.equal((await create({ requestId: randomUUID() })).status, 409);
+    assert.equal((await create({ provider: provider === 'codex' ? 'qwen' : 'codex' })).status, 409);
+  } finally { release(); }
+  const [a, b, replay] = await Promise.all([first, second, create({})]);
+  for (const result of [a, b, replay]) {
+    assert.equal(result.status, 200);
+    assert.equal(result.data.createdSessionId, a.data.binding.id);
+    assert.equal(result.data.binding.canControl, true);
+  }
+  assert.deepEqual(creations, [provider]); assert.deepEqual(sends, []);
+});
+
+test('WorkBuddy distinguishes joining login, recovering a specific attempt and legacy clients', async t => {
+  const options = [], attemptId = randomUUID();
+  const manager = {
+    status: () => ({ phase: 'authenticating', loginAttemptId: attemptId }),
+    authenticate(allowed, value) { allowed(); options.push(value); },
+  };
+  const f = await fixture(t, { workBuddyServeManager: manager, projectIndependentSessions: true, autoTrust: { origin } });
+  const base = { provider: 'workbuddy', instanceId: (await f.read()).instanceId };
+  const send = body => f.web('/v1/session/new', { ...base, ...body }, f.token);
+  assert.equal((await send({ operation: 'ensureLogin' })).status, 202);
+  assert.equal((await send({ operation: 'reopenLogin', requestId: attemptId })).status, 202);
+  assert.equal((await send({ operation: 'authenticate' })).status, 202);
+  assert.deepEqual(options, [{ reopen: false, attemptId: undefined }, { reopen: true, attemptId }, { reopen: true, attemptId: undefined }]);
+  assert.equal((await send({ operation: 'reopenLogin' })).status, 400);
+  assert.equal((await send({ operation: 'ensureLogin', requestId: attemptId })).status, 400);
+});
+
+test('WorkBuddy CLI preparation and login leave the page unbound, and creation can retry after login', async t => {
+  let phase = 'idle', loginAttempts = 0, creations = 0;
+  const manager = {
+    status: () => ({ phase }),
+    ensure({ assertAllowed }) { assertAllowed(); phase = 'ready'; return { phase }; },
+    authenticate(assertAllowed) { assertAllowed(); loginAttempts++; phase = 'authenticating'; },
+    async createAndBind(bind) {
+      if (!creations++) throw Object.assign(Error('login required'), { code: 'WORKBUDDY_AUTH_REQUIRED' });
+      const session = { id: 'ses_cli_test' };
+      await bind(session);
+      return session;
+    },
+  };
+  const f = await fixture(t, { workBuddyServeManager: manager, projectIndependentSessions: true, autoTrust: { origin } });
+  const base = { provider: 'workbuddy', instanceId: (await f.read()).instanceId };
+  const command = body => f.web('/v1/session/new', body, f.token);
+  assert.equal((await command(base)).status, 202);
+  assert.equal((await command({ ...base, operation: 'authenticate', instanceId: 'stale' })).status, 409);
+  assert.equal((await command({ ...base, operation: 'authenticate' })).data.phase, 'authenticating');
+  assert.equal((await f.read()).binding, null);
+  phase = 'ready';
+  const create = { ...base, requestId: randomUUID(), allowControl: false };
+  assert.equal((await command(create)).status, 428);
+  assert.equal(loginAttempts, 2);
+  phase = 'ready';
+  const result = await command(create);
+  assert.equal(result.status, 200);
+  assert.equal(result.data.createdSessionId, result.data.binding.id);
+  assert.equal(result.data.binding.canControl, false);
+  assert.equal((await command(create)).data.createdSessionId, result.data.createdSessionId);
+  assert.equal(creations, 2);
+  assert.equal((await command({ ...create, allowControl: true })).status, 409);
+});
 
 test('new WB task automatically selects during native running; old publisher survives and SSE contains only selected projection',async t=>{
   const f=await fixture(t),abort=new AbortController();t.after(()=>abort.abort());

@@ -1,16 +1,18 @@
 # 快麦 Agent 连接器
 
-本机 Agent 桥接服务，通过 `km-agent/1` 提供会话发现、选择、实时消息和授权后的网页输入。代码版支持 **macOS + Node.js 22 或更新版本**，已验证 ChatGPT / Codex 与千问办公的网页页面协作。
+本机 Agent 桥接服务，通过 `km-agent/1` 提供会话发现、选择、实时消息和授权后的网页输入。代码版支持 **macOS + Node.js 22 或更新版本**，可连接 ChatGPT / Codex、千问办公和 WorkBuddy CLI。
 
 ## 网页接入
 
-在绫通快麦多维表格网页选择 ChatGPT / Codex 或千问办公，点击“复制连接请求”，交给本地 Agent 执行：
+在绫通快麦多维表格网页选择 Agent，点击“复制连接请求”，交给本地 Agent 执行。
 
 ```sh
 npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" connect --request '<网页自动生成的请求>'
 ```
 
 `CONNECTOR_VERSION` 使用网页复制文案中的 npm 版本。命令安装或复用当前用户目录中的对应版本，启动或复用共享后台进程，并将实际端口返回原网页。HTTP 开发页与 HTTPS 正式页可共用进程和端口，每个网页来源各自领取授权。无需选择项目目录、填写端口或配对码。接入请求自生成起 10 小时内有效。
+
+WorkBuddy CLI 使用本机 WorkBuddy 安装包提供的 CLI。在网页选择已有 CLI 会话或新建会话，确认绑定后即可收发消息。需要账号授权时，在官方登录页完成登录。CLI 进程退出后可能需要重新登录，已保存的会话仍可选择。
 
 - 不安装 macOS App，不创建登录启动项，不修改原 Agent 的模型和工具审批设置。
 - 首选端口 17653 占用时在 17653–17684 内自动选择可用端口，网页自动发现，不终止占用进程。

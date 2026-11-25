@@ -101,9 +101,9 @@
   }
   function create({ onStatus = () => {} } = {}) {
     let pending, controller, session;
-    function accept(descriptor, data, existingGrant) {
+    function accept(descriptor, data, existingGrant, provider = existingGrant?.provider) {
       if (!code.test(data?.token || '') || data.snapshot?.instanceId !== descriptor.instanceId) throw Error('连接器实例校验失败');
-      const grant = { endpoint: descriptor.endpoint, instanceId: descriptor.instanceId, reconnectToken: data.reconnectToken || existingGrant?.reconnectToken, expiresAt: data.expiresAt };
+      const grant = { endpoint: descriptor.endpoint, instanceId: descriptor.instanceId, reconnectToken: data.reconnectToken || existingGrant?.reconnectToken, expiresAt: data.expiresAt, ...(provider && { provider }) };
       if (!validGrant(grant)) throw Error('本页恢复授权无效');
       // Access token remains in memory. Only the limited 8h restore grant is kept
       // in this tab's sessionStorage, never in the copied request or localStorage.
@@ -129,9 +129,11 @@
       onStatus('本机连接器已接入', { phase: 'connected' }); return session;
     }
     async function waitForGrant(value, signal) {
-      onStatus('请将连接请求交给本地 Agent，安装启动后会在本页自动连接', { phase: 'waiting-for-agent' });
+      const waitingMessage = value.desktopApp ? '请在快麦连接器中允许此次接入' : '请将连接请求交给本地 Agent，安装启动后会在本页自动连接';
+      onStatus(waitingMessage, { phase: 'waiting-for-agent' });
+      const deadline = value.desktopApp ? value.created + 120000 : Infinity;
       const saved = read(localStorage, endpointKey); let candidates = [], nextDiscovery = 0, found = false;
-      while (!signal.aborted && validPending(value)) {
+      while (!signal.aborted && validPending(value) && Date.now() < deadline) {
         if (needsExtension) {
           try { await extensionTransport(); }
           catch (error) { if (!signal.aborted) onStatus(error.message, { phase: 'waiting-for-agent' }); await delay(2000, signal); continue; }
@@ -151,15 +153,20 @@
             candidates = []; nextDiscovery = 0; break;
           }
           if (signal.aborted) throw Error('连接准备已取消');
-          if (!data.pending) return accept(descriptor, data);
+          if (!data.pending) return accept(descriptor, data, undefined, value.provider);
           if (!found && !signal.aborted) {
             found = true;
-            onStatus('已找到本机连接器，等待本地 Agent 执行连接请求以完成本页授权', { phase: 'waiting-for-agent' });
+            onStatus(value.desktopApp ? waitingMessage : '已找到本机连接器，等待本地 Agent 执行连接请求以完成本页授权', { phase: 'waiting-for-agent' });
           }
         }
         await delay(1500, signal);
       }
-      throw signal.aborted ? Error('连接准备已取消') : Error('连接请求已过期，请重新复制');
+      if (signal.aborted) throw Error('连接准备已取消');
+      if (value.desktopApp) {
+        sessionStorage.removeItem(pendingKey);
+        throw Error('连接未完成。请确认已安装快麦连接器，再点击打开。');
+      }
+      throw Error('连接请求已过期，请重新复制');
     }
     function track(work) {
       pending = work.catch(error => {
@@ -168,15 +175,15 @@
       }).finally(() => { if (pending === tracked) pending = null; }); const tracked = pending;
       pending.catch(() => {}); return pending;
     }
-    function prepare({ onRequest = () => {}, provider } = {}) {
-      if (provider !== undefined && !['codex', 'qwen'].includes(provider)) throw Error('不支持的 Agent');
+    function prepare({ onRequest = () => {}, provider, desktopApp = false } = {}) {
+      if (provider !== undefined && !['codex', 'qwen', 'workbuddy'].includes(provider)) throw Error('不支持的 Agent');
       controller?.abort(); session?.detach(); session = null; controller = new AbortController();
-      const value = { state:random(), verifier:random(), created:Date.now() }, origin = location.origin;
+      const value = { state:random(), verifier:random(), created:Date.now(), ...(provider && { provider }), ...(desktopApp && { desktopApp: true }) }, origin = location.origin;
       const url = 'km-agent://connect?' + new URLSearchParams({ origin, callback:origin+'/agent/connect-callback.html', state:value.state,
         challenge:globalThis.KmDesktopConnector.challengeFor(value.verifier), browser:'default', transport:'direct', ...(provider ? { provider } : {}) });
       const request = btoa(JSON.stringify({url,created:value.created})).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
       onRequest(request); sessionStorage.setItem(pendingKey,JSON.stringify(value));
-      return { request, connection:track(waitForGrant(value,controller.signal)) };
+      return { url, request, connection:track(waitForGrant(value,controller.signal)) };
     }
     function connect({ passive = false } = {}) {
       if (pending) return pending;
@@ -198,7 +205,13 @@
         return accept(descriptor,data,grant);
       })());
     }
-    function hasSaved() { return !!(validGrant(read(sessionStorage,grantKey)) || validPending(read(sessionStorage,pendingKey))); }
+    function hasPendingRequest() { return !!validPending(read(sessionStorage, pendingKey)); }
+    function hasSaved() { return !!validGrant(read(sessionStorage, grantKey)) || hasPendingRequest(); }
+    function savedProvider() {
+      const waiting = read(sessionStorage, pendingKey);
+      const provider = (validPending(waiting) ? waiting : read(sessionStorage, grantKey))?.provider;
+      return ['workbuddy', 'codex', 'qwen'].includes(provider) ? provider : 'codex';
+    }
     function close({ forget = false } = {}) {
       controller?.abort(); pending = null; const current = session; session = null;
       if (forget) {
@@ -207,7 +220,7 @@
       }
       current?.detach();
     }
-    return { prepare, connect, close, hasSaved };
+    return { prepare, connect, close, hasSaved, hasPendingRequest, savedProvider };
   }
   globalThis.KmCodeConnector = Object.freeze({ create });
 })();

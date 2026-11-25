@@ -1,9 +1,9 @@
 const BUSY=new Set(['queued','running','stopping','unknown']);
 import{nextSourceOrder}from'./source-order.mjs';
-export function createFollowManager({adapter,autoTrust,clients,bind,push,now=Date.now,enableMultiAgentFollow=false,workBuddy=false,canSwitch=()=>true}){
+export function createFollowManager({adapter,autoTrust,clients,bind,push,now=Date.now,enableMultiAgentFollow=false,workBuddy=false,manualSelection=false,canSwitch=()=>true}){
  const nativeSupported=typeof adapter.watchRelevantSessions==='function',supported=nativeSupported||enableMultiAgentFollow&&workBuddy;let watcher=null,retry=null,closed=false,epoch=0,status='idle',starting=null;
  const authorized=c=>c.active&&c.expires>=now()&&c.follow?.authorized;
-  function init(c,trusted=false){const allowed=supported&&(trusted||enableMultiAgentFollow);c.follow={authorized:allowed,enabled:allowed&&autoTrust?.followSessions!==false,pending:[],switching:false,epoch:0,error:'',lastSwitch:null,...(enableMultiAgentFollow?{latestOrder:0}:{})};}
+  function init(c,trusted=false){const allowed=supported&&(trusted||enableMultiAgentFollow);c.follow={authorized:allowed,enabled:allowed&&!manualSelection&&autoTrust?.followSessions!==false,pending:[],switching:false,epoch:0,error:'',lastSwitch:null,...(enableMultiAgentFollow?{latestOrder:0}:{})};}
   function hold(c,target,ownBinding=false){if(c.bindingBusy&&!ownBinding)return'binding';if(!enableMultiAgentFollow)return BUSY.has(c.hub?.projection.value.status)?'running':'';if(c.writesBusy||c.newSessionBusy)return'submitting';if(c.hub?.projection.value.questions?.length)return'questions';if(c.hub?.projection.value.approvals?.length)return'approvals';if(BUSY.has(c.run?.status))return'isolated-running';if(target&&!canSwitch(c,target))return'subscription-limit';return'';}
  const view=c=>({supported,mode:c.follow?.enabled?'follow':'pinned',discovery:status,pending:c.follow?.pending||[],switching:c.follow?.switching||false,error:c.follow?.error||'',lastSwitch:c.follow?.lastSwitch||null,...(enableMultiAgentFollow?{holdReason:hold(c,c.follow?.pending.at(-1))}: {})});
  async function drain(c){const state=c.follow;if(!state?.enabled||!authorized(c)||state.switching||!state.pending.length||hold(c,state.pending.at(-1)))return;

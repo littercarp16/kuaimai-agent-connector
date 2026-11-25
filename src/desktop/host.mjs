@@ -3,6 +3,7 @@ import { mkdir, chmod, writeFile, rename, readFile, unlink } from 'node:fs/promi
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnector } from '../http/server.mjs';
+import { createWorkBuddySessionList } from '../adapters/workbuddy/session-list.mjs';
 import { createProductAdapters } from '../adapters/product-adapters.mjs';
 import { createCodexAdapter } from '../adapters/codex/codex.mjs';
 import { createCodexDesktopManager } from '../runtime/codex-desktop.mjs';
@@ -17,6 +18,7 @@ import { createFileLogger, nullLogger } from '../runtime/logger.mjs';
 
 export function createDesktopHost({ directory, preferredPort = 17653, onChange = () => {}, now = Date.now,
   reconnect = false, direct = false, logger = null,
+  workBuddyServe, workBuddyServeManager, sessionOptions,
   adapterFactory = options => createProductAdapters(options, { codex: createCodexAdapter }),
   qwenDesktopFactory = () => createQwenDesktopManager(),
   desktopFactory = () => createCodexDesktopManager({ dock: createCodexDockManager() }),
@@ -62,11 +64,14 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
       if (!logger) log = createFileLogger({ path: join(directory, 'service.log') });
       log.info('service.starting', { preferredPort, maxBytes: log.maxBytes, backups: log.backups });
       qwenDesktop = qwenEnabled && process.platform === 'darwin' ? qwenDesktopFactory() : null;
-      const adapter = adapterFactory({ adapter: 'generic', codexSessionScope: 'agent', codexEnabled, qwenEnabled });
+      const codexWorkspace = join(directory, 'codex-workspace');
+      if (codexEnabled) await mkdir(codexWorkspace, { recursive: true, mode: 0o700 });
+      const adapter = adapterFactory({ adapter: 'generic', codexSessionScope: 'agent', codexWorkspace, codexEnabled, qwenEnabled,
+        workBuddyServe: sessionOptions ? createWorkBuddySessionList(sessionOptions) : workBuddyServeManager?.adapter || workBuddyServe });
       const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
       const publisherCommand = [process.execPath, fileURLToPath(new URL('../../publish.mjs', import.meta.url)), '--runtime', runtimePath].map(quote).join(' ');
       connector = createConnector({ adapter, allowedOrigins: origins, pairCode, publisherKey: key, logger: log,
-        publisherCommand, projectIndependentSessions: true, qwenDesktop,
+        publisherCommand, projectIndependentSessions: true, qwenDesktop, workBuddyServeManager,
         onPairCode: code => { pairCode = code; publish(); },
         onBindings: value => { bindings = value; if (connector && endpoint) void persist(key, connector.instanceId); },
         codexDesktop: codexEnabled && process.platform === 'darwin' ? desktopFactory() : null,

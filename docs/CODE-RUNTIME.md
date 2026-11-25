@@ -35,6 +35,8 @@ HTTPS 直连网站若设置 CSP，`connect-src` 需包含 `http://127.0.0.1:*`�
 
 前端同步：`node desktop/sync-code.mjs /absolute/path/to/lingtong-app-view`。同步 npm 版本和 SDK；历史回调静态文件保留兼容。先发布 npm，再发布引用新版本的网页。
 
+验收 npm 版时，可为测试命令设置 `KM_AGENT_CODE_INSTANCE_DIR`，指向当前用户专用的临时绝对目录。该实例独立保存运行状态和 WorkBuddy 工作目录，npm 安装位置与普通用户相同。
+
 ## 验证
 
 `tests/desktop/direct.test.mjs` 验证来源/实例/PKCE、错误 Host、单次领取、过期、恢复回收和主动撤销。

@@ -9,9 +9,25 @@ test('namespace uses thread.id, never root sessionId, and declares honest capabi
   const f = await fixture(t); const meta = await f.bind();
   assert.deepEqual(meta, { id: SESSION, title: '原生测试', provider: 'codex', nativeThreadId: THREAD, directory: f.directory });
   assert.equal(f.adapter.descriptor.id, 'codex'); assert.equal(f.adapter.descriptor.status, 'native');
-  for (const key of ['attachments', 'fileSearch', 'newSession', 'followSessions']) assert.equal(f.adapter.capabilities[key], false);
-  for (const key of ['send', 'interrupt', 'questions', 'approvals', 'toolDetails']) assert.equal(f.adapter.capabilities[key], true);
+  for (const key of ['attachments', 'fileSearch', 'followSessions']) assert.equal(f.adapter.capabilities[key], false);
+  for (const key of ['send', 'interrupt', 'questions', 'approvals', 'toolDetails', 'newSession']) assert.equal(f.adapter.capabilities[key], true);
   assert.equal(f.calls.some(c => c.method === 'thread/resume'), false);
+});
+test('a new persistent thread binds before its first turn without a resume or an implicit prompt', async t => {
+  const f = await fixture(t);
+  f.handlers.set('thread/start', params => {
+    assert.deepEqual(params, { cwd: f.directory, ephemeral: false, historyMode: 'paginated' });
+    return { thread: f.thread };
+  });
+  f.handlers.set('thread/turns/list', () => { throw Object.assign(Error(), { code: 'CODEX_EMPTY_HISTORY' }); });
+  const created = await f.adapter.createSharedSession();
+  assert.equal(created.id, SESSION);
+  await f.bind();
+  await f.watch();
+  assert.deepEqual((await f.adapter.readShared(SESSION)).messages, []);
+  assert.ok(!f.calls.some(c => ['thread/resume', 'turn/start'].includes(c.method)));
+  f.handlers.set('thread/turns/list', () => { throw Error('unrelated history failure'); });
+  await assert.rejects(f.adapter.readShared(SESSION));
 });
 test('list filters exact canonical workspace and rejects children, unknown sources and subagents', async t => {
   const f = await fixture(t); await symlink(f.directory, path.join(f.directory, 'alias'));

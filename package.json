@@ -1,15 +1,35 @@
 {
   "name": "kuaimai-agent-connector",
-  "version": "0.5.0",
-  "description": "Local Agent bridge for Kuaimai and Lingtong, with background Codex sessions and browser connections",
+  "version": "0.7.0",
+  "description": "Local Agent bridge for Kuaimai and Lingtong with Codex, Qwen and WorkBuddy CLI sessions",
   "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "git+https://github.com/littercarp16/kuaimai-agent-connector.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/littercarp16/kuaimai-agent-connector.git"
+  },
   "homepage": "https://github.com/littercarp16/kuaimai-agent-connector#readme",
-  "bugs": { "url": "https://github.com/littercarp16/kuaimai-agent-connector/issues" },
-  "bin": { "kuaimai-agent": "bin/kuaimai-agent.mjs" },
-  "files": ["bin/", "src/", "web/", "browser-extension/", "skills/km-agent-bridge/", "workspace/README.md", "*.mjs"],
-  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
-  "os": ["darwin"],
+  "bugs": {
+    "url": "https://github.com/littercarp16/kuaimai-agent-connector/issues"
+  },
+  "bin": {
+    "kuaimai-agent": "bin/kuaimai-agent.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "web/",
+    "browser-extension/",
+    "skills/km-agent-bridge/",
+    "workspace/README.md",
+    "*.mjs"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "os": [
+    "darwin"
+  ],
   "type": "module",
   "scripts": {
     "start": "node main.mjs",

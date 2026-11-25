@@ -420,6 +420,23 @@ test('only the Codex resume active-writer error reports a conversation in use', 
   }
 });
 
+test('only the matching thread and history request can classify an unmaterialized first turn as empty', async t => {
+  const { client, peer } = await connect(t);
+  const threadId = '01234567-89ab-4def-8123-456789abcdef';
+  const message = 'thread ' + threadId + ' is not materialized yet; thread/turns/list is unavailable before first user message';
+  for (const [method, target, expected] of [
+    ['thread/turns/list', threadId, 'CODEX_EMPTY_HISTORY'],
+    ['thread/turns/list', '22222222-2222-4222-8222-222222222222', 'CODEX_RPC_ERROR'],
+    ['thread/read', threadId, 'CODEX_RPC_ERROR'],
+  ]) {
+    const count = peer.messages.length;
+    const pending = client.request(method, { threadId: target });
+    await waitFor(() => peer.messages.length > count);
+    send(peer, { id: peer.messages.at(-1).id, error: { code: -32600, message } });
+    await assert.rejects(pending, error => error.code === expected && !error.message.includes(threadId));
+  }
+});
+
 test('pre-abort is NOT_SUBMITTED; post-send timeout/abort is UNKNOWN, never retried; late replies drop', async t => {
   const { client, peer } = await connect(t);
   const before = new AbortController();

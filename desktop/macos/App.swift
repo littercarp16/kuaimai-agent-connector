@@ -4,7 +4,7 @@ import Foundation
 
 struct Settings: Codable {
     var origins: [String] = []
-    var loginEnabled: Bool = true
+    var loginEnabled: Bool = false
     var serviceEnabled: Bool = true
 }
 
@@ -74,7 +74,7 @@ final class ConnectorApp: NSObject, NSApplicationDelegate {
         let originsButton = NSButton(title: "允许的网站…", target: self, action: #selector(editOrigins))
         toggleButton.target = self; toggleButton.action = #selector(toggleService); toggleButton.bezelStyle = .rounded
         let row = NSStackView(views: [toggleButton, originsButton]); row.orientation = .horizontal; row.spacing = 10
-        let description = NSTextField(wrappingLabelWithString: "在网页的 Agent 下拉框中选择 ChatGPT / Codex，连接后选择会话即可。关闭此窗口后，连接器继续在菜单栏后台运行。")
+        let description = NSTextField(wrappingLabelWithString: "回到绫通网页选择 Agent 和会话。关闭此窗口后，连接器继续在菜单栏后台运行。")
         description.font = .systemFont(ofSize: 12); description.textColor = .secondaryLabelColor
         let stack = NSStackView(views: [title, statusLabel, endpointLabel, sessionsLabel, pairingLabel, row, loginLabel, description])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16; stack.translatesAutoresizingMaskIntoConstraints = false
@@ -232,7 +232,9 @@ final class ConnectorApp: NSObject, NSApplicationDelegate {
                 if dialog.runModal() != .alertFirstButtonReturn { self.command("deny", fields: ["requestId": id]) { _, _ in }; self.finishURL(); return }
                 self.command("authorize", fields: ["requestId": id]) { result, error in
                     defer { self.finishURL() }
-                    guard let result = result, let value = result["callbackURL"] as? String, let callback = URL(string: value), error == nil else { self.alert("接入未完成", error ?? "回调地址无效"); return }
+                    guard let result = result, error == nil else { self.alert("接入未完成", error ?? "本机授权失败"); return }
+                    if result["transport"] as? String == "direct" { return }
+                    guard let value = result["callbackURL"] as? String, let callback = URL(string: value) else { self.alert("接入未完成", "回调地址无效"); return }
                     self.openCallback(callback, browser: result["browser"] as? String ?? "default")
                 }
             }

@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { mkdir, lstat, chmod, unlink, realpath } from 'node:fs/promises';
-import { join, resolve, parse } from 'node:path';
+import { isAbsolute, join, resolve, parse } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
@@ -10,6 +10,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import packageInfo from '../../package.json' with { type: 'json' };
 import { createDesktopHost } from '../desktop/host.mjs';
 import { createCodexDesktopManager } from '../runtime/codex-desktop.mjs';
+import { workBuddySessionOptions } from '../adapters/workbuddy/session-list.mjs';
+import { createWorkBuddyServeManager } from '../runtime/workbuddy-serve.mjs';
 import { parseConnectURL } from '../desktop/connect-grants.mjs';
 import { DIRECT_REQUEST_TTL_MS } from '../desktop/direct-grants.mjs';
 import { validWebOrigin } from '../runtime/web-origin.mjs';
@@ -19,7 +21,12 @@ import { ORIGINS as EXTENSION_ORIGINS } from '../extension/policy.mjs';
 
 export const VERSION = packageInfo.version;
 export const dataRoot = () => join(homedir(), '.kuaimai-agent', 'code');
-const sharedDirectory = () => join(dataRoot(), 'instances', 'shared');
+const sharedDirectory = () => {
+  const directory = process.env.KM_AGENT_CODE_INSTANCE_DIR;
+  if (!directory) return join(dataRoot(), 'instances', 'shared');
+  if (!isAbsolute(directory)) throw Error('KM_AGENT_CODE_INSTANCE_DIR 需要独立实例的绝对目录');
+  return directory;
+};
 const CONTROL_PROTOCOL = 1;
 const missingService = error => ['ENOENT', 'ECONNREFUSED'].includes(error.code);
 const requireOrigin = origin => {
@@ -74,14 +81,23 @@ export async function runService({ origin, directory = sharedDirectory(), port =
   directory = await privateDirectory(directory);
   const logger = createFileLogger({ path: join(directory, 'service.log') });
   const socketPath = join(directory, 'control.sock');
-  const host = createDesktopHost({ directory, preferredPort: port, reconnect: true, direct: true, logger, qwenDesktopFactory,
+  const sessionOptions = workBuddySessionOptions();
+  delete process.env.KM_AGENT_WORKBUDDY_PASSWORD;
+  const workBuddyServeManager = sessionOptions ? null : createWorkBuddyServeManager({ directory });
+  let displayedPairCode;
+  const host = createDesktopHost({ directory, preferredPort: port, reconnect: true, direct: true, logger, qwenDesktopFactory, workBuddyServeManager, sessionOptions,
+    onChange(status) {
+      if (!process.stdout.isTTY || !status.pairCode || status.pairCode === displayedPairCode) return;
+      displayedPairCode = status.pairCode;
+      console.log('本地连接器配对码 ' + status.pairCode + '（10 分钟内有效，仅供已允许的网站使用）');
+    },
     // Code mode never installs either the bridge or Codex login task.
     desktopFactory: () => createCodexDesktopManager(),
   });
   let server, closing = false, shutdownRequested = false, ownsControlSocket = false, browserSetup;
   const publicStatus = requestedOrigin => {
     const { endpoint, instanceId, state, origins } = host.status();
-    return { version: VERSION, controlProtocol: CONTROL_PROTOCOL, endpoint, instanceId, state: shutdownRequested ? 'stopping' : state, origin: requestedOrigin ?? origins[0] ?? null, origins, pid: process.pid, loginStartup: false, qwenDesktopPreparation: true, logging: logger.status() };
+    return { version: VERSION, controlProtocol: CONTROL_PROTOCOL, endpoint, instanceId, state: shutdownRequested ? 'stopping' : state, origin: requestedOrigin ?? origins[0] ?? null, origins, pid: process.pid, loginStartup: false, qwenDesktopPreparation: true, workBuddyDesktopPreparation: !!workBuddyServeManager, workBuddySessionSelection: true, workBuddyWebFetchApproval: true, logging: logger.status() };
   };
   const fatal = error => logger.error('process.uncaught_exception', { instanceId: host.status().instanceId, error });
   process.on('uncaughtExceptionMonitor', fatal);
@@ -168,17 +184,24 @@ export async function runService({ origin, directory = sharedDirectory(), port =
     return { status: publicStatus, stop };
   } catch (error) { logger.error('service.start_failed', { error }); await stop(); throw error; }
 }
-export async function ensureService({ origin, directory = sharedDirectory(), port = 17653 }) {
+export async function ensureService({ origin, directory = sharedDirectory(), port = 17653, requireWorkBuddy = false }) {
   requireOrigin(origin);
   directory = await privateDirectory(directory);
   const check = async () => {
     try {
       const status = await control(directory, { action: 'status' });
       if (status?.controlProtocol !== CONTROL_PROTOCOL || !/^\d+\.\d+\.\d+$/.test(status.version || '')) throw Error('已有连接器的本机控制协议不兼容，请使用匹配的 npm 版本');
+      if (requireWorkBuddy && status.state === 'running' && status.workBuddySessionSelection !== true) {
+        throw Error('正在运行的连接器不支持 WorkBuddy。请待现有任务结束后升级连接器，再执行本次请求。');
+      }
+      if (requireWorkBuddy && status.state === 'running' && status.workBuddyWebFetchApproval !== true) {
+        throw Error('正在运行的连接器尚不支持 WorkBuddy 网页读取审批。请待现有任务结束后停止旧连接器，再执行网页复制的新连接请求。');
+      }
       return status;
     } catch (error) { if (missingService(error)) return null; throw error; }
   };
-  const reusable = status => status?.state === 'running' && status.version.localeCompare(VERSION, undefined, { numeric: true }) >= 0;
+  const reusable = status => status?.state === 'running' && (requireWorkBuddy ?
+    status.workBuddySessionSelection === true : status.version.localeCompare(VERSION, undefined, { numeric: true }) >= 0);
   let release;
   for (let i = 0; i < 100; i++) {
     const existing = await check();
@@ -218,14 +241,15 @@ export async function ensureService({ origin, directory = sharedDirectory(), por
   } finally { await release(); }
 }
 export async function connectService(encoded, { directory = sharedDirectory(), port, registerExtension = false } = {}) {
-  const { origin } = decodeRequest(encoded);
-  const status = await ensureService({ origin, directory, port });
+  const { origin, provider } = decodeRequest(encoded);
+  const options = { origin, directory, port, requireWorkBuddy: provider === 'workbuddy' };
+  const status = await ensureService(options);
   const request = { action: 'connect', request: encoded, registerExtension };
   try {
     return { ...await control(directory, request), reused: status.reused };
   } catch (error) {
     if (!missingService(error) && error.code !== 'ESHUTDOWN') throw error;
-    const ready = await ensureService({ origin, directory, port });
+    const ready = await ensureService(options);
     return { ...await control(directory, request), reused: ready.reused };
   }
 }

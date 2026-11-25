@@ -139,9 +139,16 @@ test('当前 CLI 复用兼容的较新后台，拒绝不兼容协议并升级旧
   await assert.rejects(ensureService({ origin, directory }), /本机控制协议不兼容/);
   assert.deepEqual(actions, ['status', 'status']);
   status = { ...status, version: '0.0.0', controlProtocol: 1 };
+  await assert.rejects(ensureService({ origin, directory, requireWorkBuddy: true }), /待现有任务结束后升级/);
+  assert.deepEqual(actions.slice(2), ['status']);
+  status.workBuddySessionSelection = true;
+  await assert.rejects(ensureService({ origin, directory, requireWorkBuddy: true }), /尚不支持 WorkBuddy 网页读取审批/);
+  status.workBuddyWebFetchApproval = true;
+  assert.deepEqual(await ensureService({ origin, directory, requireWorkBuddy: true }), { ...status, reused: true });
+  assert.deepEqual(actions.slice(2), ['status', 'status', 'status']);
   const upgraded = await ensureService({ origin, directory });
   assert.equal(upgraded.version, VERSION);
   assert.notEqual(upgraded.pid, status.pid);
   assert.equal(upgraded.reused, false);
-  assert.deepEqual(actions.slice(2), ['status', 'status', 'stop']);
+  assert.deepEqual(actions.slice(5), ['status', 'status', 'stop']);
 });

@@ -9,10 +9,10 @@ const unavailable=()=>({ready:false,version:null,message:'该原生来源暂不�
 export function createNativeRegistry({primary,additional=[]}={}){
  if(!primary?.health||!Array.isArray(additional))throw Error('需要明确原生主适配器');const entries=[primary,...additional],providers=new Map(),health=new Map(),watchers=new Set();let closed=false;
  const provider=a=>a.descriptor?.id||'opencode';
- for(const a of entries){const id=provider(a);if(!/^[a-z][a-z0-9-]{0,39}$/.test(id)||!a?.health||providers.has(id)||id==='workbuddy')throw Error('原生适配器来源重复或无效');providers.set(id,a);}
+ for(const a of entries){const id=provider(a);if(!/^[a-z][a-z0-9-]{0,39}$/.test(id)||!a?.health||providers.has(id)||id==='workbuddy'&&a.descriptor.status!=='native')throw Error('原生适配器来源重复或无效');providers.set(id,a);}
  function forSession(id){
   if(typeof id!=='string'||!/^ses[\w-]{1,120}$/.test(id))throw Error('原生会话标识无效');
-  if(id.startsWith('ses_wb_'))throw Error('WorkBuddy不是原生适配器来源');
+  if(id.startsWith('ses_wb_')){const a=providers.get('workbuddy');if(!a||!/^ses_wb_native_[a-f0-9]{32}$/.test(id))throw Error('WorkBuddy 原生来源未知或尚未配置');return a;}
   if(id.startsWith('ses_codex_')){const a=providers.get('codex');if(!a||!/^ses_codex_[a-f0-9]{32}$/.test(id))throw Error('Codex来源未知或尚未安装适配器');return a;}
   if(id.startsWith('ses_qwen_')){const a=providers.get('qwen');if(!a||!/^ses_qwen_[a-f0-9]{32}$/.test(id))throw Error('千问办公来源未知或尚未启用');return a;}
   if(provider(primary)==='codex')throw Error('未知原生来源，不回退Codex');return primary;
@@ -25,7 +25,7 @@ export function createNativeRegistry({primary,additional=[]}={}){
    if(agent.ready&&a.listSessions){try{const result=await a.listSessions();if(!Array.isArray(result))throw Error();sessions=result.filter(s=>{try{return forSession(s.id)===a;}catch{return false;}}).slice(0,100).map(s=>({...s,provider:id,adapter:a.descriptor||{id,status:'native'},capabilities:nativeCapabilities(a,agent)}));}catch{status='unavailable';}}
    return{provider:id,status,adapter:a.descriptor||{id,status:'native'},agent,capabilities:nativeCapabilities(a,status==='available'?agent:{...agent,ready:false}),sessions,...(status==='unavailable'?{message:'原生来源列表暂不可用，未将失败表示为空列表成功。'}:{})};}));return lastSources.map(({sessions,...s})=>s);
  }
- const registry={...primary,descriptor:primary.descriptor||{id:provider(primary),status:'native'},forSession,agentFor,healthFor,sourceDiagnostics:()=>lastSources.map(({sessions,...s})=>s),async health(){return healthFor(primary);},async listSessions(){await listSources();return lastSources.flatMap(s=>s.sessions);},listSources,async close(){if(closed)return;closed=true;for(const w of [...watchers])w.close();await Promise.all(entries.map(a=>Promise.resolve().then(()=>a.close?.()).catch(()=>{})));}};
+ const registry={...primary,descriptor:primary.descriptor||{id:provider(primary),status:'native'},forSession,forProvider:id=>providers.get(id),agentFor,healthFor,sourceDiagnostics:()=>lastSources.map(({sessions,...s})=>s),async health(){return healthFor(primary);},async listSessions(){await listSources();return lastSources.flatMap(s=>s.sessions);},listSources,async close(){if(closed)return;closed=true;for(const w of [...watchers])w.close();await Promise.all(entries.map(a=>Promise.resolve().then(()=>a.close?.()).catch(()=>{})));}};
  if(entries.some(a=>typeof a.bindSession==='function'))registry.bindSession=async id=>{const source=forSession(id);if(typeof source.bindSession!=='function')throw Error('该来源不支持共享绑定');return source.bindSession(id);};
  const discoverable=entries.filter(a=>typeof a.watchRelevantSessions==='function');
  if(discoverable.length)registry.watchRelevantSessions=(offer,onState=()=>{})=>{

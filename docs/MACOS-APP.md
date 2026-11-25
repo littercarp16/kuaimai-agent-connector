@@ -70,7 +70,7 @@ document.querySelector('#connectChatGPT').onclick = async () => {
 
 当前验收使用 macOS Chrome，四个来源均完成真实浏览器的 JSON 请求和 SSE 测试。Safari、Edge、Firefox 的原生回跳路由已提供，但尚未逐个浏览器实测。
 
-- 本机程序通过 `km-agent://connect` 唤起，由系统处理；浏览器可能要求确认“打开应用”。未安装时 SDK 最多等待两分钟并显示安装/重试提示。
+- 本机程序通过 `km-agent://connect` 唤起，由系统处理；浏览器可能要求确认“打开应用”。WorkBuddy 的直接授权由原网页领取，两个 HTTP 开发来源沿用连接窗口。未安装时 SDK 最多等待两分钟并显示安装/重试提示。
 - 接入页需要保留与连接弹窗的 `window.opener` 关系。支持默认 COOP 或 `Cross-Origin-Opener-Policy: same-origin-allow-popups`。若现有产品采用严格 `same-origin`/`noopener`，请设计独立的接入页面并评估隔离需求，不要直接移除全站隔离策略。
 - 网站 CSP 只需允许本站 SDK/回调脚本；网站不直接 fetch 本机 HTTP。连接窗口是顶层 `http://127.0.0.1:<实际端口>` 页面，使用自己的同源 fetch，再通过准确匹配来源、窗口和 state 的 `postMessage` 传递响应。
 - 回调页与原始页面必须处于同一浏览器配置文件/存储分区。应用按浏览器类型回跳，无法可靠选择浏览器的隐私窗口或多个用户配置。回跳到不同配置时会明确提示返回原浏览器重试。

@@ -32,10 +32,13 @@ function fixture() {
 test('pending authorization has an actionable state and becomes connected only after a grant', async () => {
   const f = fixture(), prepared = f.client.prepare({ provider: 'codex' });
   try {
+    assert.equal(f.client.hasPendingRequest(), true);
     assert.equal(f.states[0].phase, 'waiting-for-agent');
     await until(() => f.states.some(s => s.message.includes('已找到本机连接器')));
     assert.ok(f.states.every(s => s.phase === 'waiting-for-agent'));
     f.authorize(); await prepared.connection;
+    assert.equal(f.client.hasSaved(), true);
+    assert.equal(f.client.hasPendingRequest(), false);
     assert.equal(f.states.at(-1).phase, 'connected');
     assert.ok(!f.calls.includes('/v1/run'));
   } finally { f.client.close(); }
@@ -44,6 +47,7 @@ test('a restored pending request is available for ten hours from creation', asyn
   const f = fixture(), hour = 60 * 60 * 1000;
   const pendingAt = created => f.sessionStorage.setItem('km-agent.code.pending', JSON.stringify({ state: 's'.repeat(43), verifier: 'v'.repeat(43), created }));
   pendingAt(Date.now() - 10 * hour);
+  assert.equal(f.client.hasPendingRequest(), false);
   assert.equal(f.client.hasSaved(), false);
   await assert.rejects(f.client.connect(), /复制最新连接请求/);
   pendingAt(Date.now() - 9 * hour);

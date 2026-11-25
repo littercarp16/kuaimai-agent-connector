@@ -5,6 +5,7 @@ import { createConnector } from '../http/server.mjs';
 import { createFileLogger } from '../runtime/logger.mjs';
 import{createCodexAdapter}from'../adapters/codex/codex.mjs';
 import{createProductAdapters}from'../adapters/product-adapters.mjs';
+import{createWorkBuddySessionList,workBuddySessionOptions}from'../adapters/workbuddy/session-list.mjs';
 import{parseLaunchOptions}from'../runtime/launch-options.mjs';
 import { claimService, serviceProfile, listenAvailable } from '../runtime/service-instance.mjs';
 import{loadNativeScopes}from'../runtime/native-scope-config.mjs';
@@ -33,6 +34,9 @@ async function launchArguments(args) {
 const config=parseLaunchOptions(await launchArguments(process.argv.slice(2))),origin=config.origin;
 const authorizedWorkspace=await realpath(config.workspace||process.cwd());
 if(!(await stat(authorizedWorkspace)).isDirectory())throw Error('工作区须为现有目录');
+const sessionOptions=workBuddySessionOptions(config.workspace ? authorizedWorkspace : undefined);
+delete process.env.KM_AGENT_WORKBUDDY_PASSWORD;
+const workBuddyServe=sessionOptions ? createWorkBuddySessionList(sessionOptions) : null;
 const publisherKey=randomBytes(32).toString('base64url'),runtimeDir=fileURLToPath(new URL('../../.runtime/',import.meta.url)),runtimePath=runtimeDir+(config.port===17653?'connector.json':`connector-${config.port}.json`);
 let endpoint=`http://127.0.0.1:${config.port}`;
 const releaseService=await claimService(runtimePath,serviceProfile(config,authorizedWorkspace));
@@ -49,8 +53,8 @@ try{
   codexWorkspace=scopes.codexWorkspace;
   qwenEnabled=scopes.qwenEnabled===true;
 }catch(error){logger.error('agent.config_failed',{error});codexEnabled=false;console.error('本机来源范围配置无效，已禁用依赖该配置的来源。');}
-const adapter=createProductAdapters({adapter:config.adapter,sessionId:config.sessionId,workspace:authorizedWorkspace,codexWorkspace,codexEnabled,qwenEnabled,qwenSessionId:process.env.KM_AGENT_QWEN_SESSION},{codex:createCodexAdapter});
-const connector=createConnector({adapter,logger,codexDesktop:codexEnabled&&process.platform==='darwin'?createCodexDesktopManager({dock:createCodexDockManager()}):null,enableMultiAgentFollow:true,enableWorkBuddy:true,workBuddyOptions:{workspaceId:'ws_'+createHash('sha256').update(authorizedWorkspace).digest('hex')},allowedOrigins:[origin,...(config.additionalOrigins||[])],autoTrust:config.auto?{origin,sessionId:config.sessionId,allowControl:config.allowControl,followSessions:config.followSessions}:null,pairCode,onPairCode:printCode,publisherKey,onBindings:value=>{bindings=value;void persist().catch(error=>{logger.error('service.persist_failed',{instanceId:connector.instanceId,error});console.error('本地发布状态写入失败；网页会话不受影响，请检查本机目录权限');});}});
+const adapter=createProductAdapters({adapter:config.adapter,sessionId:config.sessionId,workspace:authorizedWorkspace,codexWorkspace,codexEnabled,qwenEnabled,qwenSessionId:process.env.KM_AGENT_QWEN_SESSION,workBuddyServe},{codex:createCodexAdapter});
+const connector=createConnector({adapter,logger,manualSessionSelection:!!workBuddyServe,codexDesktop:codexEnabled&&process.platform==='darwin'?createCodexDesktopManager({dock:createCodexDockManager()}):null,enableMultiAgentFollow:true,enableWorkBuddy:true,workBuddyOptions:{workspaceId:'ws_'+createHash('sha256').update(authorizedWorkspace).digest('hex')},allowedOrigins:[origin,...(config.additionalOrigins||[])],autoTrust:config.auto?{origin,sessionId:config.sessionId,allowControl:config.allowControl,followSessions:config.followSessions}:null,pairCode,onPairCode:printCode,publisherKey,onBindings:value=>{bindings=value;void persist().catch(error=>{logger.error('service.persist_failed',{instanceId:connector.instanceId,error});console.error('本地发布状态写入失败；网页会话不受影响，请检查本机目录权限');});}});
 async function shutdown(code=0) {
   logger.info('service.stopping',{instanceId:connector.instanceId,endpoint});
   await connector.close(); await writeQueue.catch(()=>{});

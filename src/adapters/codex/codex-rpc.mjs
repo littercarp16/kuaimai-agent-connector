@@ -107,7 +107,11 @@ const safeClassifications = new Set([
   'invalid_params', 'unauthorized', 'permission_denied', 'unsupported', 'rate_limited',
   'overloaded', 'cancelled', 'timeout', 'internal_error', 'server_error',
 ]);
-function rpcError(error, method) {
+function rpcError(error, method, historyThreadId) {
+  if (method === 'thread/turns/list' && historyThreadId && error.code === -32600 &&
+      error.message === 'thread ' + historyThreadId + ' is not materialized yet; thread/turns/list is unavailable before first user message') {
+    return safeError('CODEX_EMPTY_HISTORY', '新会话尚无消息');
+  }
   if (method === 'thread/resume' && error.code === -32600 && typeof error.message === 'string' &&
     /^thread [0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12} already has an active writer$/.test(error.message)) {
     return safeError('CODEX_THREAD_IN_USE', 'Codex 会话仍由另一个客户端占用');
@@ -213,6 +217,7 @@ export async function connectCodexRpc({ socketPath, version = null, timeoutMs = 
       };
       const entry = {
         method,
+        historyThreadId: method === 'thread/turns/list' ? params?.threadId : undefined,
         succeed: result => { cleanup(); resolve(result); },
         fail: error => { cleanup(); reject(error); },
       };
@@ -257,7 +262,7 @@ export async function connectCodexRpc({ socketPath, version = null, timeoutMs = 
     if (!has(message, 'id') || !validId(message.id)) return terminate();
     const entry = pending.get(message.id);
     if (!entry) return; // Unknown, cancelled, timed out and late responses are never broadcast/replayed.
-    if (record(message.error)) entry.fail(rpcError(message.error, entry.method));
+    if (record(message.error)) entry.fail(rpcError(message.error, entry.method, entry.historyThreadId));
     else if (has(message, 'result') && !has(message, 'error')) {
       if (message.result !== null && typeof message.result === 'object') receiptOrders.set(message.result, receiptOrder);
       entry.succeed(message.result);

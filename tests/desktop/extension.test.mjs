@@ -38,7 +38,12 @@ test('注册本机通道保留浏览器配置，固定扩展身份，可重复�
 
 test('真实本机消息帧：授权仍需 PKCE，跨来源不可借用 token，关闭通道释放连接', { timeout: 15000 }, async t => {
   const directory = await mkdtemp('/private/tmp/km-ext-native-');
-  const host = createDesktopHost({ directory, direct: true, codexEnabled: false, adapterFactory: () => ({ health: async () => ({ ready: true }), listSessions: async () => [], close: async () => {} }) });
+  let preparations = 0;
+  const workBuddyServeManager = {
+    ensure({ assertAllowed }) { assertAllowed(); preparations++; return { phase: 'starting' }; },
+  };
+  const host = createDesktopHost({ directory, direct: true, codexEnabled: false, workBuddyServeManager,
+    adapterFactory: () => ({ health: async () => ({ ready: true }), listSessions: async () => [], close: async () => {} }) });
   const started = await host.start({ origins: ORIGINS }), input = new PassThrough(), output = new PassThrough();
   const native = await runNativeHost({ input, output });
   t.after(async () => { await native.close(); input.destroy(); output.destroy(); await host.stop(); await rm(directory, { recursive: true, force: true }); });
@@ -68,6 +73,16 @@ test('真实本机消息帧：授权仍需 PKCE，跨来源不可借用 token，
   const granted = await call('/v1/connect/claim', claim), headers = { authorization: 'Bearer ' + granted.data.token };
   assert.equal((await call('/v1/snapshot', null, headers)).status, 200);
   assert.equal((await call('/v1/snapshot', null, headers, ORIGINS[1])).status, 401);
+  const workBuddy = { provider: 'workbuddy', instanceId: started.instanceId };
+  assert.equal((await call('/v1/sources', null, headers)).status, 200);
+  assert.equal(preparations, 0);
+  assert.ok((await call('/v1/session/new', workBuddy)).error);
+  assert.equal((await call('/v1/session/new', workBuddy, headers, ORIGINS[1])).status, 401);
+  assert.equal((await call('/v1/session/new', { ...workBuddy, password: 'irrelevant' }, headers)).status, 400);
+  assert.equal((await call('/v1/session/new', { ...workBuddy, instanceId: 'stale' }, headers)).status, 409);
+  assert.equal(preparations, 0);
+  assert.deepEqual((await call('/v1/session/new', workBuddy, headers)).data, { phase: 'starting' });
+  assert.equal(preparations, 1);
   assert.ok((await call('/v1/local/publish', {}, headers)).error);
   await native.close();
   const after = await fetch(started.endpoint + '/v1/snapshot', { headers: { Origin: ORIGINS[0], Authorization: headers.authorization } });
