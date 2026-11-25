@@ -18,7 +18,7 @@
 2. 使用返回taskId发布`plan.updated`；随后`resource.create`、公开`activity.updated`（kind仅phase）、逐块`artifact.updated/page.section.updated/table.rows.append`。不要把原始工具请求/返回或私有思维链塞进phase或run.note；只上报真实动作与为用户撰写的简短公开阶段。
 3. 每事件唯一ID，不发数组；保持资源ID稳定。同一ID只重查回执，不用它表示另一次编辑。已有资源用`resource.edit`，不create覆盖；数据、来源和模拟范围须如实说明。
 4. 确认内容完成才发`artifact.ready`，不能把空壳、部分数据或失败标成ready。存在building成果时，不能用finish绕过就绪检查。
-5. `km_task_receipt`核验关键事件。`multiAgentFollow`就绪且未锁定时，网页自动查看新任务，不要求用户每次点击候选；锁定、旧部署或问题待答时可能暂未展示。`accepted`仅表示接收/缓存；**不借用旧OpenCode会话、不自动重跑整批事件**。`applied`才表示某授权前端应用，仍不证明人已阅读或平台已保存；deferred/failed/unknown按实际报告。
+5. `km_task_receipt`核验关键事件。`multiAgentFollow`就绪且未锁定时，网页自动查看新任务，不要求用户每次点击候选；锁定、旧部署或问题待答时可能暂未展示。`accepted`仅表示接收/缓存；**不借用其他来源的会话、不自动重跑整批事件**。`applied`才表示某授权前端应用，仍不证明人已阅读或平台已保存；deferred/failed/unknown按实际报告。
 6. 所有需要生成的成果明确ready后，将已上报阶段按实际结果更新结束，再用`km_task_finish`报告完成。最终答复区分：内容已生成、网页应用是否确认、是否由用户点击“使用”。不得把“已报告完成”当作WorkBuddy原生终态证据。
 
 ## 单事件示例
@@ -44,7 +44,7 @@
 
 ## 权限和失败
 
-- **不启动第二个连接器**、不杀17653进程、不扩大OpenCode权限；**不借用OpenCode** sesID发布WorkBuddy任务。新版按新任务观测顺序自动切换查看，但不停止旧任务，原来源仍独立缓存；用户可锁定/恢复自动，手动选源按Agent分组。
+- **不启动第二个连接器**、不杀17653进程、不扩大其他来源权限；**不借用其他来源** sesID发布WorkBuddy任务。新版按新任务观测顺序自动切换查看，但不停止旧任务，原来源仍独立缓存；用户可锁定/恢复自动，手动选源按Agent分组。
 - 本机发布key与每任务私有票据由MCP客户端管理，不读取、输出、粘贴到技能/对话/事件里，也不要在工具参数添加token。只能操作本MCP进程持有票据的taskId。
 - 网页无反向prompt、新建原生会话、附件提交、原生Questions、工具审批或停止能力。不伪造这些功能已接通。
 - 工具不存在、实例变化、票据失效或连接不可达时，停止发布并说明阻断；不降级generic、不扫描端口、不从厂商聊天数据库或私有IPC恢复。不确定的open/publish/finish结果不自动重发，先核验已有任务/事件。

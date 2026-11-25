@@ -11,7 +11,7 @@ export async function exportAutomaticConfig({out,origin,endpoint='http://127.0.0
  if(inside(directory,root)||inside(skill,root)||!(await lstat(skill)).isDirectory()||!(await lstat(work)).isDirectory())fail('INVALID_CONFIG');
  const gateway=join(skill,'scripts/mcp-entry.mjs'),seed=join(skill,'scripts/prepare.mjs');
  for(const file of[gateway,seed,join(skill,'SKILL.md')]){await safePath(file);const info=await lstat(file);if(!info.isFile()||process.getuid&&info.uid!==process.getuid()||info.mode&0o022)fail('UNSAFE_PATH');}
- const bootstrap={version:1,allowPortFallback:true,endpoint,origin,launcher:join(root,'start.mjs'),runtimeFile:join(root,'.runtime/connector.json'),mcpEntry:join(root,'mcp-workbuddy.mjs'),launchArgs:['--adapter','opencode','--trust-origin',origin,'--port',new URL(endpoint).port,'--workspace',work]};
+ const bootstrap={version:1,allowPortFallback:true,endpoint,origin,launcher:join(root,'start.mjs'),runtimeFile:join(root,'.runtime/connector.json'),mcpEntry:join(root,'mcp-workbuddy.mjs'),launchArgs:['--adapter','generic','--trust-origin',origin,'--port',new URL(endpoint).port,'--workspace',work]};
  if(new URL(endpoint).port!=='17653')bootstrap.runtimeFile=join(root,`.runtime/connector-${new URL(endpoint).port}.json`);
  if(release!==undefined){
   if(!plain(release)||Object.keys(release).sort().join()!=='installRoot,sha256,url,version'||!/^[a-f\d]{64}$/i.test(release.sha256||'')||!validVersion(release.version))fail('INVALID_CONFIG');

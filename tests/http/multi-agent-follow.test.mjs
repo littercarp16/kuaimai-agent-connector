@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {request as httpRequest} from 'node:http';
 import {createConnector} from '../../src/http/server.mjs';
 import {createNativeRegistry} from '../../src/adapters/native-registry.mjs';
-import{createSessionDiscovery}from'../../src/adapters/opencode/session-discovery.mjs';
+import {nextSourceOrder} from '../../src/session/source-order.mjs';
 
 const origin='http://127.0.0.1:4173',key='multi-agent-test-publisher',workspaceId='ws_authorized';
 const until=async fn=>{const deadline=Date.now()+2000;while(!await fn()){if(Date.now()>deadline)throw Error('routing condition timed out');await new Promise(r=>setTimeout(r,25));}};
@@ -20,7 +20,6 @@ async function fixture(t,options={}){
     sendShared:async()=>{calls.push(['send']);return{id:'msg_sent'};},interruptShared:async()=>{calls.push(['interrupt']);return{interrupted:true};},
     listQuestions:async()=>[],replyQuestion:async()=>{},rejectQuestion:async()=>{}};
   if(options.noNative){delete adapter.watchRelevantSessions;delete adapter.bindSession;delete adapter.watch;delete adapter.readShared;}
-  if(options.nativeDiscovery)adapter.watchRelevantSessions=options.nativeDiscovery;
   const bridge=createConnector({adapter,allowedOrigins:[origin],publisherKey:key,enableWorkBuddy:true,enableMultiAgentFollow:true,workBuddyOptions:{workspaceId},autoTrust:{origin,sessionId:'ses_seed',allowControl:true},onBindings:value=>bindings.push(value),now:()=>now,...options});
   bridge.server.listen(0,'127.0.0.1');await once(bridge.server,'listening');t.after(()=>bridge.close());
   const base=`http://127.0.0.1:${bridge.server.address().port}`;
@@ -277,5 +276,14 @@ test('disconnect releases every retained watcher even while one instruction clea
   const f=await fixture(t);f.offer({id:'ses_second',reason:'prompt'});await until(async()=>(await f.read()).sessionId==='ses_second');let entered=false,release;
   f.adapter.removeBridge=async id=>{if(id==='ses_second'){entered=true;await new Promise(r=>{release=r;});}};await f.web('/v1/disconnect',{},f.token);await until(()=>entered);const remaining=f.watchers.size,advertised=f.bindings.at(-1).length;release();await until(()=>f.watchers.size===0);assert.equal(remaining,0,'slow cleanup must not retain other authorized subscriptions');assert.equal(advertised,0,'revoked bindings must stop being advertised immediately');
 });
-test('旧原生事件的异步工作区核验迟到，不能抢回较新的WorkBuddy任务（同一时钟刻度）',async t=>{let push,release,entered=false,done=false;const client={event:{subscribe:async function*({signal}){yield{type:'server.connected'};while(!signal.aborted){const event=await new Promise(r=>{push=r;});if(event)yield event;}}},session:{get:async({sessionID})=>{entered=true;await new Promise(r=>{release=r;});done=true;return{id:sessionID,title:'先前原生任务',location:{directory:'/workspace'},time:{}};}}},discovery=createSessionDiscovery({current:()=>({client}),health:async()=>{},directory:'/workspace'}),f=await fixture(t,{nativeDiscovery:discovery.watchRelevantSessions});await until(()=>push);push({id:randomUUID(),type:'session.inbox.enqueued',data:{sessionID:'ses_older',item:{type:'user',payload:{text:'请使用lingtong-cli查询'}}}});await until(()=>entered);const newer=await f.open('更新的WorkBuddy任务');await until(async()=>(await f.read()).sessionId===newer.taskId);release();await until(()=>done);await new Promise(r=>setImmediate(r));const snapshot=await f.read();assert.equal(snapshot.sessionId,newer.taskId,'顺序应在异步校验之前记录，不按校验完成顺序抢占');assert.equal(snapshot.binding.canControl,false);});
+test('较早发现的原生会话不能抢回较新的 WorkBuddy 任务', async t => {
+  const f = await fixture(t);
+  const observedOrder = nextSourceOrder();
+  const newer = await f.open('更新的 WorkBuddy 任务');
+  await until(async () => (await f.read()).sessionId === newer.taskId);
+  await f.offer({ id: 'ses_older', reason: 'prompt', observedOrder });
+  const snapshot = await f.read();
+  assert.equal(snapshot.sessionId, newer.taskId);
+  assert.equal(snapshot.binding.canControl, false);
+});
 test('旧WB请求body迟到时，在线选择与首次握手缓存seed都按观测顺序而非插入顺序',async t=>{const f=await fixture(t),body=JSON.stringify({requestId:randomUUID(),title:'较早但body迟到的任务A',workspaceId});let held;const response=new Promise((resolve,reject)=>{held=httpRequest(f.base+'/v1/local/workbuddy/tasks/open',{method:'POST',headers:{'X-Km-Agent':'1','X-Km-Publisher':key,'Content-Type':'application/json','Content-Length':Buffer.byteLength(body),Expect:'100-continue'}},res=>{let text='';res.on('data',c=>text+=c);res.on('end',()=>resolve(JSON.parse(text)));});held.on('error',reject);});held.flushHeaders();await once(held,'continue');held.write(body.slice(0,20));const b=await f.open('较新的完整任务B');held.end(body.slice(20));assert.equal((await response).ok,true);assert.equal((await f.read()).sessionId,b.taskId);assert.equal((await f.read()).incomingSources[0].id,b.taskId,'缓存首项不能按body完成后的插入顺序');const newClient=await f.handshake();assert.equal(newClient.data.snapshot.sessionId,b.taskId);});

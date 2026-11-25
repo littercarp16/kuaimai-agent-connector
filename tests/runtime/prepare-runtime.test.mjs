@@ -248,3 +248,10 @@ test('bootstrap preserves explicit additional manual-pairing origins across rest
     f.config.launchArgs.splice(-2);
   }
 });
+
+test('reject an old OpenCode bootstrap before reuse or launch', async t => {
+  const f = await fixture(t);
+  f.config.launchArgs[f.config.launchArgs.indexOf('--adapter') + 1] = 'opencode';
+  await f.save();
+  await assert.rejects(api.loadBootstrapConfig(f.configFile), {code: 'RETIRED_ADAPTER', message: /重新选择 Agent/});
+});

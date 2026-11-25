@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { validWebOrigin, validAutoTrustOrigin } from './web-origin.mjs';
 export function parseLaunchOptions(args) {
-  const out = { adapter: 'opencode', origin: process.env.KM_AGENT_ORIGIN || 'http://127.0.0.1:4173', sessionId: null, allowControl: false, auto: false, port: 17653, followSessions: true };
+  const out = { adapter: 'generic', origin: process.env.KM_AGENT_ORIGIN || 'http://127.0.0.1:4173', sessionId: null, allowControl: false, auto: false, port: 17653, followSessions: true };
   const additionalOrigins = [];
   for (let i = 0; i < args.length; i++) {
     const key = args[i];
@@ -23,13 +23,13 @@ export function parseLaunchOptions(args) {
     }
   }
   if (!Number.isSafeInteger(out.port) || out.port < 1024 || out.port > 65535) throw Error('端口须为明确的1024–65535整数');
-  if (!['opencode', 'generic'].includes(out.adapter)) throw Error('适配器仅支持opencode或generic，不冒充其他原生接入');
+  if (out.adapter !== 'generic') throw Error('旧启动入口仅支持 generic 发布适配器。请在网页重新选择 Codex、千问办公或 WorkBuddy CLI。');
   if (!validWebOrigin(out.origin) || out.auto && !validAutoTrustOrigin(out.origin)) throw Error('来源须为精确 HTTPS 或本地开发 Origin；自动授权仍仅限 127.0.0.1 显式端口');
   if (additionalOrigins.length > 15 || additionalOrigins.some(origin => !validWebOrigin(origin)) || new Set([out.origin, ...additionalOrigins]).size !== additionalOrigins.length + 1) throw Error('附加来源须为不重复的精确 HTTPS 或本地开发 Origin');
   if (additionalOrigins.length) out.additionalOrigins = additionalOrigins;
   delete out.explicitOrigin;
   if (out.sessionId && !/^ses[\w-]{1,120}$/.test(out.sessionId)) throw Error('会话标识无效');
   if (out.workspace !== undefined && (!isAbsolute(out.workspace) || out.workspace.includes('\0'))) throw Error('工作区须为明确绝对目录');
-  if (out.allowControl && (out.adapter === 'generic' || !out.sessionId)) throw Error('通用适配器没有双向控制能力，OpenCode控制必须明确会话');
+  if (out.allowControl) throw Error('通用适配器没有双向控制能力，请在网页选择原生会话并确认绑定');
   return out;
 }

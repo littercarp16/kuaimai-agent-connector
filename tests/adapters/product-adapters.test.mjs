@@ -1,4 +1,30 @@
-import{test}from'node:test';import assert from'node:assert/strict';
-test('产品启动注册附加Codex而不替换OpenCode、另起daemon或扩权',async()=>{const m=await import('../../src/adapters/product-adapters.mjs').catch(e=>{if(e.code==='ERR_MODULE_NOT_FOUND')return{};throw e;});assert.equal(typeof m.createProductAdapters,'function','产品启动缺少多原生注册入口');const calls=[],factory=id=>opts=>{calls.push([id,opts]);return{descriptor:{id,status:'native'},health:async()=>({ready:true}),listSessions:async()=>[]};};const result=m.createProductAdapters({adapter:'opencode',workspace:'/explicit/workspace'},{opencode:factory('opencode'),codex:factory('codex')});assert.equal(result.descriptor.id,'opencode');assert.deepEqual(calls,[['opencode',{directory:'/explicit/workspace'}],['codex',{directory:'/explicit/workspace'}]]);assert.equal(result.forSession('ses_codex_0123456789abcdef0123456789abcdef').descriptor.id,'codex');await result.close();});
-test('隔离启动测试可以明确禁用附加Codex，不探测用户真实daemon',async()=>{const{createProductAdapters}=await import('../../src/adapters/product-adapters.mjs');let calls=0;const registry=createProductAdapters({adapter:'opencode',workspace:'/fixture',codexEnabled:false},{opencode:()=>({descriptor:{id:'opencode'},health:async()=>({ready:true}),listSessions:async()=>[]}),codex:()=>{calls++;throw Error('禁止真实Codex探测');}});assert.equal(calls,0);assert.throws(()=>registry.forSession('ses_codex_0123456789abcdef0123456789abcdef'));await registry.close();});
-test('用户明确Codex使用另一工作区时，不改变OpenCode原目录',async()=>{const{createProductAdapters}=await import('../../src/adapters/product-adapters.mjs'),calls=[],factory=id=>options=>{calls.push([id,options.directory]);return{descriptor:{id},health:async()=>({ready:true}),listSessions:async()=>[]};},r=createProductAdapters({workspace:'/project/design',codexWorkspace:'/project/lt-agent'},{opencode:factory('opencode'),codex:factory('codex')});assert.deepEqual(calls,[['opencode','/project/design'],['codex','/project/lt-agent']]);await r.close();});
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createProductAdapters} from '../../src/adapters/product-adapters.mjs';
+import {parseLaunchOptions} from '../../src/runtime/launch-options.mjs';
+
+const native = id => ({descriptor: {id, status: 'native'}, health: async () => ({ready: true}), listSessions: async () => []});
+
+test('产品注册三个原生来源，旧会话无法路由到其他 Agent', async () => {
+  const workBuddy = native('workbuddy');
+  const registry = createProductAdapters({
+    workspace: '/project', codexWorkspace: '/codex', qwenEnabled: true, workBuddyServe: workBuddy,
+  }, {codex: options => { assert.equal(options.directory, '/codex'); return native('codex'); }});
+  assert.equal(registry.descriptor.id, 'generic');
+  assert.equal(registry.forProvider('opencode'), undefined);
+  const suffix = '0'.repeat(32);
+  for (const [prefix, provider] of [['codex', 'codex'], ['qwen', 'qwen'], ['wb_native', 'workbuddy']]) {
+    assert.equal(registry.forSession('ses_' + prefix + '_' + suffix).descriptor.id, provider);
+  }
+  await assert.rejects(registry.bindSession('ses_old'), /不支持共享绑定/);
+  await registry.close();
+});
+
+test('默认启动 generic，显式指定退役适配器会直接报错', async () => {
+  assert.equal(parseLaunchOptions([]).adapter, 'generic');
+  assert.throws(() => parseLaunchOptions(['--adapter', 'opencode']), /重新选择/);
+  assert.throws(() => createProductAdapters({adapter: 'opencode'}), /不支持此适配器/);
+  const registry = createProductAdapters({codexEnabled: false});
+  assert.throws(() => registry.forSession('ses_codex_' + '0'.repeat(32)));
+  await registry.close();
+});

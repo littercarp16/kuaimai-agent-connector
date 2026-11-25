@@ -27,21 +27,21 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
   if(!adapter?.health)throw Error('需要 Agent 适配器');
   const origins=new Set();for(const origin of allowedOrigins)allowOrigin(origin);
   if(autoTrust&&(!origins.has(autoTrust.origin)||!/^http:\/\/127\.0\.0\.1:\d+$/.test(autoTrust.origin)||autoTrust.sessionId!=null&&!/^ses[\w-]+$/.test(autoTrust.sessionId)))throw Error('自动授权必须指定受信loopback来源及有效会话');
-  if(autoTrust?.allowControl===true&&(!autoTrust.sessionId||adapter.descriptor?.id==='generic'||adapter.descriptor?.id==='workbuddy'))throw Error('网页控制必须明确原生OpenCode会话');
+  if(autoTrust?.allowControl===true&&(!autoTrust.sessionId||adapter.descriptor?.id==='generic'||adapter.descriptor?.id==='workbuddy'))throw Error('网页控制必须明确可控制的原生会话');
   const instanceId=randomUUID(),clients=new Map(),streams=new Set(),rates=new Map(),hubs=new Map(),cleanups=new Set();
-  let code=pairCode,codeExpires=now()+10*60e3,closed=false,agent={ready:false,version:null,message:'正在检查 OpenCode'};
+  let code=pairCode,codeExpires=now()+10*60e3,closed=false,agent={ready:false,version:null,message:'正在检查 本地 Agent'};
   let healthPromise=null,healthAt=0,follow;
   function connected(client) { client.logId=randomUUID(); logger.info('client.connected',{instanceId,clientId:client.logId,origin:client.websiteOrigin||client.origin}); }
   function disconnected(client,reason) { if(client.logDisconnected)return;client.logDisconnected=true;logger.info('client.disconnected',{instanceId,clientId:client.logId,origin:client.websiteOrigin||client.origin,reason}); }
   const workBuddy=enableWorkBuddy?createWorkBuddyStore({...workBuddyOptions,...(enableMultiAgentFollow?{workspaceId:workBuddyOptions.workspaceId||'ws_'+createHash('sha256').update(process.cwd()).digest('hex')}:{ }),instanceId,publisherKey,now,onOpen:candidate=>{if(enableMultiAgentFollow)follow.offer({...candidate,reason:'task-open'});},onChange:()=>{for(const client of clients.values())if(client.active){push(client);follow.tick(client);}}}):null;
   const isWorkBuddyTask=hub=>hub?.session.provider==='workbuddy'&&hub.session.source?.nativeSession===false;
   const isWorkBuddy=client=>isWorkBuddyTask(client.hub);
-  const publicHealth=(origin)=>({service:'kuaimai-agent-connector',protocolVersion:2,interactionProtocol:PROTOCOL,instanceId,mode:'shared',agent,adapter:adapter.descriptor||{id:'opencode',status:'native'},capabilities:{projectIndependentSessions,qwenDesktopPreparation:Boolean(qwenDesktop),workBuddyDesktopPreparation:Boolean(workBuddyServeManager),workBuddyWebStart:Boolean(workBuddyServeManager),codexDesktopRestart:Boolean(codexDesktop),codexDesktopDockPersistence:codexDesktop?.capabilities?.dockPersistence===true,multiAgentFollow:enableMultiAgentFollow,autoHandshake:Boolean(autoTrust&&autoTrust.origin===origin),workbuddyPublish:Boolean(workBuddy),newSession:typeof adapter.createSharedSession==='function',workspaceFiles:typeof adapter.searchWorkspaceFiles==='function',attachments:typeof adapter.sendShared==='function',nativeQuestions:typeof adapter.listQuestions==='function'&&typeof adapter.replyQuestion==='function'&&typeof adapter.rejectQuestion==='function',followSessions:typeof adapter.watchRelevantSessions==='function',toolDetails:true,toolDetailFetch:typeof adapter.readToolDetail==='function',uiCommands:true,uiReceipts:true,demo:true,submitPrompt:agent.ready&&(typeof adapter.sendShared==='function'||typeof adapter.send==='function'),sharedSession:typeof adapter.bindSession==='function',nativeEvents:typeof adapter.watch==='function',cancelRun:typeof adapter.interruptShared==='function'||typeof adapter.interrupt==='function',previewArtifacts:true,businessWrite:false}});
-  async function checkHealth(){if(healthPromise)return healthPromise;if(healthAt&&now()-healthAt<5000)return agent;healthPromise=Promise.resolve().then(()=>adapter.health()).then(value=>{agent={ready:value.ready===true,version:typeof value.version==='string'?value.version:null,message:String(value.message||'').slice(0,180)};healthAt=now();return agent;}).catch(error=>{logger.error('agent.health_failed',{instanceId,error});agent={ready:false,version:null,message:'OpenCode 状态检查失败'};return agent;}).finally(()=>{healthPromise=null;});return healthPromise;}
+  const publicHealth=(origin)=>({service:'kuaimai-agent-connector',protocolVersion:2,interactionProtocol:PROTOCOL,instanceId,mode:'shared',agent,adapter:adapter.descriptor||{id:'unknown',status:'native'},capabilities:{projectIndependentSessions,qwenDesktopPreparation:Boolean(qwenDesktop),workBuddyDesktopPreparation:Boolean(workBuddyServeManager),workBuddyWebStart:Boolean(workBuddyServeManager),codexDesktopRestart:Boolean(codexDesktop),codexDesktopDockPersistence:codexDesktop?.capabilities?.dockPersistence===true,multiAgentFollow:enableMultiAgentFollow,autoHandshake:Boolean(autoTrust&&autoTrust.origin===origin),workbuddyPublish:Boolean(workBuddy),newSession:typeof adapter.createSharedSession==='function',workspaceFiles:typeof adapter.searchWorkspaceFiles==='function',attachments:typeof adapter.sendShared==='function',nativeQuestions:typeof adapter.listQuestions==='function'&&typeof adapter.replyQuestion==='function'&&typeof adapter.rejectQuestion==='function',followSessions:typeof adapter.watchRelevantSessions==='function',toolDetails:true,toolDetailFetch:typeof adapter.readToolDetail==='function',uiCommands:true,uiReceipts:true,demo:true,submitPrompt:agent.ready&&(typeof adapter.sendShared==='function'||typeof adapter.send==='function'),sharedSession:typeof adapter.bindSession==='function',nativeEvents:typeof adapter.watch==='function',cancelRun:typeof adapter.interruptShared==='function'||typeof adapter.interrupt==='function',previewArtifacts:true,businessWrite:false}});
+  async function checkHealth(){if(healthPromise)return healthPromise;if(healthAt&&now()-healthAt<5000)return agent;healthPromise=Promise.resolve().then(()=>adapter.health()).then(value=>{agent={ready:value.ready===true,version:typeof value.version==='string'?value.version:null,message:String(value.message||'').slice(0,180)};healthAt=now();return agent;}).catch(error=>{logger.error('agent.health_failed',{instanceId,error});agent={ready:false,version:null,message:'本地 Agent 状态检查失败'};return agent;}).finally(()=>{healthPromise=null;});return healthPromise;}
   const nativeFor=client=>client.hub?.adapter||adapter;
   const agentFor=client=>adapter.agentFor&&client.hub?adapter.agentFor(nativeFor(client)):agent;
   const capabilities=client=>isWorkBuddy(client)?{...publicHealth(client.origin).capabilities,...WORKBUDDY_CAPABILITIES,nativeApprovals:false}:{...publicHealth(client.origin).capabilities,...nativeCapabilities(nativeFor(client),agentFor(client))};
-  function snapshot(client){const wb=isWorkBuddy(client),native=nativeFor(client),selectedAdapter=wb?WORKBUDDY_ADAPTER:native.descriptor||publicHealth().adapter;return {instanceId,revision:client.revision,mode:wb?'workbuddy-publish':'shared',provider:selectedAdapter.id,adapter:selectedAdapter,agent:wb?{ready:client.hub.transport==='connected',version:null,message:'WorkBuddy 协作上报（非原生镜像）；网页不能发送需求或停止客户端。'}:agentFor(client),capabilities:capabilities(client),sessionId:client.hub?.session.id||client.sessionId,binding:client.hub?{...client.hub.session,canControl:client.canControl,transport:client.hub.transport}:null,routing:follow.view(client),incomingSources:workBuddy?.incoming()||[],...(enableMultiAgentFollow?{subscriptions:[...(client.subscriptions?.values()||[])].map(h=>({id:h.session.id,title:h.session.title,provider:h.session.provider||adapter.descriptor?.id||'opencode',status:h.projection.value.status,selected:client.hub===h}))}:{}),run:client.hub?.projection.value||client.run};}
+  function snapshot(client){const wb=isWorkBuddy(client),native=nativeFor(client),selectedAdapter=wb?WORKBUDDY_ADAPTER:native.descriptor||publicHealth().adapter;return {instanceId,revision:client.revision,mode:wb?'workbuddy-publish':'shared',provider:selectedAdapter.id,adapter:selectedAdapter,agent:wb?{ready:client.hub.transport==='connected',version:null,message:'WorkBuddy 协作上报（非原生镜像）；网页不能发送需求或停止客户端。'}:agentFor(client),capabilities:capabilities(client),sessionId:client.hub?.session.id||client.sessionId,binding:client.hub?{...client.hub.session,canControl:client.canControl,transport:client.hub.transport}:null,routing:follow.view(client),incomingSources:workBuddy?.incoming()||[],...(enableMultiAgentFollow?{subscriptions:[...(client.subscriptions?.values()||[])].map(h=>({id:h.session.id,title:h.session.title,provider:h.session.provider||adapter.descriptor?.id||'unknown',status:h.projection.value.status,selected:client.hub===h}))}:{}),run:client.hub?.projection.value||client.run};}
   function push(client){client.revision++;const data='event: snapshot\ndata: '+JSON.stringify(snapshot(client))+'\n\n';for(const res of client.streams){if(res.writableLength>512*1024){res.destroy();continue;}res.write(data);}}
   function rate(key,limit){const value=rates.get(key);if(!value||now()-value.start>=60000){rates.set(key,{start:now(),count:1});return;}if(++value.count>limit)fail(429,'请求过于频繁，请稍后重试');}
   function changedBindings(){onBindings([...hubs.values()].filter(h=>h.members.size).map(h=>({id:h.session.id,title:h.session.title,...(h.session.provider?{provider:h.session.provider}:{} ),...(enableMultiAgentFollow?{subscribed:true,selected:[...h.members].some(c=>c.active&&c.hub===h)}:{})})));follow.reconcile();}
@@ -109,7 +109,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(provider==='codex'&&error?.code==='CODEX_THREAD_IN_USE'){
         fail(409,'该 Codex 会话仍在另一个客户端打开。请在那里关闭这条会话，在 TUI 续接后再绑定。');
       }
-      const label=provider==='codex'?'Codex':provider==='opencode'?'OpenCode':provider==='qwen'?'千问办公':'本地 Agent';
+      const label=provider==='codex'?'Codex':provider==='qwen'?'千问办公':'本地 Agent';
       fail(503,`${label} 原生事件通道未就绪，原会话保留`);
     }
     if(!authorized()){if(client.pendingHub===hub)client.pendingHub=null;if(client.hub!==hub&&!client.subscriptions?.has(hub.session.id))await release(client,hub);else hub.pending.delete(client);fail(401,'授权或跟随设置已变化');}
@@ -150,7 +150,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(parsed.text)readable.push({id:message.id,role:'assistant',text:parsed.text.slice(0,14000)});
     }
     run.plan=plan;run.artifacts=[...artifacts.values()].slice(-12);run.warnings=warnings.slice(-5);
-    // Use the canonical OpenCode timeline once its user inputs have been projected.
+    // Use the canonical native timeline once its user inputs have been projected.
     run.messages=(readable.some(message=>message.role==='user')?readable:[...run.inputs,...readable]).slice(-48);
   }
   function schedule(client,action,delay){clearTimeout(client.timer);client.timer=setTimeout(()=>{client.timer=null;action();},delay);client.timer.unref?.();}
@@ -160,14 +160,14 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     try {
       const value=await adapter.read(run.sessionId);if(!isCurrent(client,run)||!BUSY.has(run.status))return;
       const before=JSON.stringify(run);updateOutput(client,value.messages);run.tools=value.tools||[];run.model=value.model||null;
-      run.status=run.stopRequested&&value.status==='running'?'stopping':value.status;run.error=value.status==='failed'?'OpenCode 本轮执行失败，请检查本地模型认证、额度或服务日志。':null;
+      run.status=run.stopRequested&&value.status==='running'?'stopping':value.status;run.error=value.status==='failed'?'本地 Agent 本轮执行失败，请检查本地模型认证、额度或服务日志。':null;
        if(JSON.stringify(run)!==before)push(client);
        if(enableMultiAgentFollow&&!BUSY.has(run.status))follow.tick(client);
       if(BUSY.has(run.status)) {
         if(now()-run.startedAt>180000){await stop(client);return;}
         schedule(client,()=>poll(client,run),900);
       }
-    } catch {if(!isCurrent(client,run))return;run.status='unknown';run.error='暂时无法读取 OpenCode，本轮结果未知；不会自动重新提交需求。';push(client);schedule(client,()=>poll(client,run),5000);}
+    } catch {if(!isCurrent(client,run))return;run.status='unknown';run.error='暂时无法读取 本地 Agent，本轮结果未知；不会自动重新提交需求。';push(client);schedule(client,()=>poll(client,run),5000);}
   }
   async function execute(client,run) {
     const signal=client.abort.signal;
@@ -180,7 +180,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
       if(!isCurrent(client,run)){await adapter.interrupt(sessionId).catch(()=>{});return;}
       if(run.stopRequested){await stop(client);return;}
       push(client);await poll(client,run);
-    } catch(error){if(!isCurrent(client,run))return;if(error.code==='NOT_SUBMITTED'){run.status='interrupted';run.error=null;push(client);return;}run.status='unknown';run.error='OpenCode 请求未获完整确认。可能已接收，本原型不会自动重发；请先停止或在本地确认。';push(client);if(run.sessionId)schedule(client,()=>poll(client,run),5000);}
+    } catch(error){if(!isCurrent(client,run))return;if(error.code==='NOT_SUBMITTED'){run.status='interrupted';run.error=null;push(client);return;}run.status='unknown';run.error='本地 Agent 请求未获完整确认。可能已接收，本原型不会自动重发；请先停止或在本地确认。';push(client);if(run.sessionId)schedule(client,()=>poll(client,run),5000);}
   }
   async function stop(client) {
     const run=client.run;if(!run||!BUSY.has(run.status))return;
@@ -188,19 +188,19 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
     if(run.mode==='demo'||!run.sessionId){run.status='interrupted';push(client);if(enableMultiAgentFollow)follow.tick(client);return;}
     run.status='stopping';push(client);
     try {const result=await adapter.interrupt(run.sessionId);if(!isCurrent(client,run)||!BUSY.has(run.status))return;run.status=result.interrupted?'interrupted':'unknown';run.error=result.interrupted?null:'停止请求已发送，尚未确认本轮终态。';push(client);if(enableMultiAgentFollow&&!BUSY.has(run.status))follow.tick(client);if(run.status==='unknown')schedule(client,()=>poll(client,run),900);}
-    catch {if(!isCurrent(client,run)||!BUSY.has(run.status))return;run.status='unknown';run.error='停止结果未知，请在本地 OpenCode 确认。';push(client);}
+    catch {if(!isCurrent(client,run)||!BUSY.has(run.status))return;run.status='unknown';run.error='停止结果未知，请在本地 Agent 中确认。';push(client);}
   }
   function begin(client,mode,input) {
     if(!client.active||client.expires<now())fail(401,'连接授权已失效，请重新配对');
     if(client.requests.has(input.requestId))return client.requests.get(input.requestId);
     if(client.run&&BUSY.has(client.run.status))fail(409,'当前执行尚未结束，请先等待或停止');
-    const previous=mode==='opencode'&&client.run?.mode==='opencode'?client.run:null;
+    const previous=mode==='native'&&client.run?.mode==='native'?client.run:null;
     if(!previous)client.sessionId=null;
     const run={id:randomUUID(),mode,status:'running',prompt:input.text||'构建一个商品补货分析应用',startedAt:now(),plan:previous?.plan||null,artifacts:previous?.artifacts||[],messages:[],inputs:[...(previous?.inputs||[]),{id:randomUUID(),role:'user',text:input.text||'演示：构建商品补货分析应用'}],tools:[],warnings:[],error:null};
     run.messages=[...run.inputs];client.run=run;client.abort=new AbortController();
     const receipt={runId:run.id};client.requests.set(input.requestId,receipt);if(client.requests.size>64)client.requests.delete(client.requests.keys().next().value);
     push(client);
-    if(mode==='opencode')void execute(client,run);
+    if(mode==='native')void execute(client,run);
     else {
       const messages=[];let index=0;
       const step=()=>{if(!isCurrent(client,run)||run.status!=='running')return;messages.push({id:'demo-'+index,text:DEMO_STAGES[index++]});updateOutput(client,messages);if(index===DEMO_STAGES.length)run.status='completed';push(client);if(enableMultiAgentFollow&&run.status==='completed')follow.tick(client);if(run.status==='running')schedule(client,step,1400);};
@@ -441,7 +441,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         if(req.url==='/v1/sources'&&!workBuddy&&!enableMultiAgentFollow)fail(404,'接口不存在');
         if(!workBuddy&&!enableMultiAgentFollow){if(!adapter.listSessions)fail(503,'适配器不支持共享会话');return json(res,200,{ok:true,data:await adapter.listSessions()});}
         let primary=[],status='available';try{if(!adapter.listSessions)throw Error();primary=await adapter.listSessions();if(!Array.isArray(primary))throw Error();}catch(error){logger.error('agent.sessions_failed',{instanceId,requestId:requestLog.requestId,error});primary=[];status='unavailable';}
-        const provider=adapter.descriptor?.id||'opencode',primarySource={provider,status,adapter:publicHealth().adapter,capabilities:publicHealth().capabilities,...(status==='unavailable'?{message:'原生会话列表暂不可用；未将失败表示为空列表成功。'}:{})};
+        const provider=adapter.descriptor?.id||'unknown',primarySource={provider,status,adapter:publicHealth().adapter,capabilities:publicHealth().capabilities,...(status==='unavailable'?{message:'原生会话列表暂不可用；未将失败表示为空列表成功。'}:{})};
         const sources=[...(adapter.sourceDiagnostics?.()||[primarySource]),...(workBuddy?[{provider:'workbuddy',status:'available',adapter:WORKBUDDY_ADAPTER,capabilities:WORKBUDDY_CAPABILITIES}]:[])];
         if(projectIndependentSessions){
           for(const source of sources){
@@ -496,7 +496,8 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
           try{assertSubmissionCurrent();const receipt=await originalHub.submit(client,value,{assertCurrent:assertSubmissionCurrent});assertSubmissionCurrent();return json(res,202,{ok:true,data:receipt});}catch(error){requestLog.error(error);if(error?.code==='NOT_SUBMITTED'&&error.reason==='native_prompt_whitespace')fail(409,'千问当前接口会移除消息首尾空白，本条消息未发送。请确认并调整输入后再发送。');if(error?.code==='NOT_SUBMITTED'&&error.reason==='page_context_unsupported')fail(409,'千问当前接口尚不支持独立页面上下文，本条消息未发送。');if(error?.code==='NOT_SUBMITTED'&&error.reason==='busy')fail(409,'千问办公本轮仍在运行，消息未发送。请等本轮结束后再发送。');if(error?.code==='NOT_SUBMITTED')fail(409,'发送前会话或控制授权已变化，本条消息未提交；请核对后再操作');fail(409,'需求提交未获完整确认，不会自动重发；请核验本地会话');}
         }
         if(value.uploads?.length||value.references?.length)fail(409,'附件只支持已绑定的原生共享会话');
-        return json(res,202,{ok:true,data:begin(client,req.url==='/v1/demo'?'demo':'opencode',value)});
+        if(req.url==='/v1/run'&&(typeof adapter.createSession!=='function'||typeof adapter.send!=='function'))fail(409,'请先选择 Agent 并绑定原生会话');
+        return json(res,202,{ok:true,data:begin(client,req.url==='/v1/demo'?'demo':'native',value)});
       }
       const actionHub=client.hub,actionEpoch=client.bindingEpoch,actionTransportEpoch=client.hub?.transportEpoch;
       const actionInput=await body(req,req.url==='/v1/stop'?['instanceId','sessionId']:[]);

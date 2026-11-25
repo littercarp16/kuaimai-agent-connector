@@ -1,4 +1,14 @@
 import{test}from'node:test';import assert from'node:assert/strict';import{readFile}from'node:fs/promises';
 import{contract}from'../../src/protocol/protocol.mjs';
-test('可分发技能优先指向WorkBuddy MCP流程且参考随包安装',async()=>{const base=new URL('../../skills/',import.meta.url),entry=await readFile(new URL('km-agent-bridge/SKILL.md',base),'utf8');assert.ok(entry.includes('references/workbuddy.md'),'缺少WorkBuddy MCP入口');const ref=await readFile(new URL('km-agent-bridge/references/workbuddy.md',base),'utf8'),manifest=JSON.parse(await readFile(new URL('manifest.json',base),'utf8'));assert.ok(manifest.files.includes('references/workbuddy.md'));for(const tool of['km_agent_protocol','km_task_open','km_task_publish','km_task_receipt','km_task_finish'])assert.ok(ref.includes(tool),tool);for(const rule of ['不启动第二个连接器','不借用OpenCode','不是原生会话镜像','accepted','applied','WorkBuddy中处理'])assert.ok(ref.includes(rule),rule);assert.doesNotMatch(entry+ref,/\/Users\/|prototypes\/kmMDTable/);});
-test('公开协议明确WorkBuddy是MCP协作发布，不是原生双向或工具订阅',()=>{const adapter=contract().adapters.find(x=>x.id==='workbuddy');assert.ok(adapter,'协议缺少WorkBuddy能力声明');assert.equal(adapter.publishUI,true);assert.equal(adapter.sendPrompt,false);assert.equal(adapter.receiveMessages,false);assert.equal(adapter.nativeActivities,false);});
+test('可分发技能优先指向WorkBuddy MCP流程且参考随包安装',async()=>{const base=new URL('../../skills/',import.meta.url),entry=await readFile(new URL('km-agent-bridge/SKILL.md',base),'utf8');assert.ok(entry.includes('references/workbuddy.md'),'缺少WorkBuddy MCP入口');const ref=await readFile(new URL('km-agent-bridge/references/workbuddy.md',base),'utf8'),manifest=JSON.parse(await readFile(new URL('manifest.json',base),'utf8'));assert.ok(manifest.files.includes('references/workbuddy.md'));for(const tool of['km_agent_protocol','km_task_open','km_task_publish','km_task_receipt','km_task_finish'])assert.ok(ref.includes(tool),tool);for(const rule of ['不启动第二个连接器','不借用其他来源','不是原生会话镜像','accepted','applied','WorkBuddy中处理'])assert.ok(ref.includes(rule),rule);assert.doesNotMatch(entry+ref,/\/Users\/|prototypes\/kmMDTable/);});
+test('公开协议明确WorkBuddy是MCP协作发布，不是原生双向或工具订阅',()=>{const adapter=contract().adapters.find(x=>x.id==='workbuddy'&&x.status==='publish-only');assert.ok(adapter,'协议缺少WorkBuddy能力声明');assert.equal(adapter.publishUI,true);assert.equal(adapter.sendPrompt,false);assert.equal(adapter.receiveMessages,false);assert.equal(adapter.nativeActivities,false);});
+
+test('公开协议列出三个原生会话来源及其实际 UI 发布能力', () => {
+  const native = contract().adapters.filter(adapter => adapter.status === 'native');
+  assert.deepEqual(native.map(adapter => adapter.id), ['codex', 'qwen', 'workbuddy']);
+  for (const adapter of native) {
+    assert.equal(adapter.sendPrompt, true);
+    assert.equal(adapter.receiveMessages, true);
+    assert.equal(adapter.publishUI, adapter.id === 'codex');
+  }
+});

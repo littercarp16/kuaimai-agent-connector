@@ -24,9 +24,9 @@ skills/
 
 ```sh
 # 先预览，不产生目录或写入
-node <本包目录>/install.mjs --agent opencode --scope project --project <目标项目> --dry-run
+node <本包目录>/install.mjs --agent codex --scope project --project <目标项目> --dry-run
 # 确认后执行同一命令，去掉--dry-run
-node <本包目录>/install.mjs --agent opencode --scope project --project <目标项目>
+node <本包目录>/install.mjs --agent codex --scope project --project <目标项目>
 
 # 用户级安装必须明确指定；不是默认行为
 node <本包目录>/install.mjs --agent claude-code --scope user --dry-run

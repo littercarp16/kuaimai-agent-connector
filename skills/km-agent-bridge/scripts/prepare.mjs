@@ -17,9 +17,9 @@ const MAX_FILES = 10000;
 const IDENTIFIER = /^[\w:.-]{1,140}$/;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const ALIASES = new Map([['/var', '/private/var'], ['/tmp', '/private/tmp'], ['/etc', '/private/etc']]);
-const CODES = new Set(['INVALID_CONFIG', 'UNSAFE_PATH', 'UNSAFE_RUNTIME', 'INVALID_RUNTIME', 'UNSUPPORTED_SERVICE', 'STALE_INSTANCE', 'HTTP_REJECTED', 'HTTP_FAILED', 'PORT_UNKNOWN', 'INSTALL_SOURCE_REQUIRED', 'INSTALL_CONFLICT', 'DOWNLOAD_FAILED', 'DOWNLOAD_TOO_LARGE', 'HASH_MISMATCH', 'INVALID_BUNDLE', 'LOCK_TIMEOUT', 'LOCK_UNSAFE', 'START_UNKNOWN', 'READINESS_TIMEOUT', 'LOCAL_FAILURE', 'SDK_FAILED']);
+const CODES = new Set(['RETIRED_ADAPTER', 'INVALID_CONFIG', 'UNSAFE_PATH', 'UNSAFE_RUNTIME', 'INVALID_RUNTIME', 'UNSUPPORTED_SERVICE', 'STALE_INSTANCE', 'HTTP_REJECTED', 'HTTP_FAILED', 'PORT_UNKNOWN', 'INSTALL_SOURCE_REQUIRED', 'INSTALL_CONFLICT', 'DOWNLOAD_FAILED', 'DOWNLOAD_TOO_LARGE', 'HASH_MISMATCH', 'INVALID_BUNDLE', 'LOCK_TIMEOUT', 'LOCK_UNSAFE', 'START_UNKNOWN', 'READINESS_TIMEOUT', 'LOCAL_FAILURE', 'SDK_FAILED']);
 export class RuntimePrepareError extends Error {
-  constructor(code) { super(code); this.name = 'RuntimePrepareError'; this.code = code; }
+  constructor(code, message = code) { super(message); this.name = 'RuntimePrepareError'; this.code = code; }
 }
 const fail = code => { throw new RuntimePrepareError(code); };
 export const publicErrorCode = error => error instanceof RuntimePrepareError && CODES.has(error.code) ? error.code : 'LOCAL_FAILURE';
@@ -113,7 +113,8 @@ export async function loadBootstrapConfig(configFile) {
     if (!['--adapter', '--session', '--trust-origin', '--port', '--workspace'].includes(key) || index + 1 >= args.length) fail('INVALID_CONFIG');
     values.set(key, args[++index]);
   }
-  if (!['opencode', 'generic'].includes(values.get('--adapter')) || values.get('--trust-origin') !== config.origin || values.get('--port') !== new URL(config.endpoint).port || !absolute(values.get('--workspace')) || values.has('--session') && !/^ses[\w-]{1,120}$/.test(values.get('--session'))) fail('INVALID_CONFIG');
+  if (values.get('--adapter') === 'opencode') throw new RuntimePrepareError('RETIRED_ADAPTER', '当前配置指定了已移除的 OpenCode。请在网页重新选择 Agent 并复制连接请求。');
+  if (values.get('--adapter') !== 'generic' || values.get('--trust-origin') !== config.origin || values.get('--port') !== new URL(config.endpoint).port || !absolute(values.get('--workspace')) || values.has('--session') && !/^ses[\w-]{1,120}$/.test(values.get('--session'))) fail('INVALID_CONFIG');
   const workspace = await safeLocalPath(values.get('--workspace'));
   if (!(await stat(workspace)).isDirectory()) fail('INVALID_CONFIG');
   for (const key of ['launcher', 'mcpEntry', 'runtimeFile']) await safeLocalPath(config[key], { allowMissing: true });

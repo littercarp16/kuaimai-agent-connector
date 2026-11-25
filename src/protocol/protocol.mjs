@@ -17,8 +17,10 @@ export const COMMANDS=Object.freeze({
  'run.note':{group:'timeline',payload:'{text}',effect:'公开说明文字'}
 });
 export const ADAPTERS=Object.freeze([
-  {id:'opencode',status:'native',receiveMessages:true,sendPrompt:true,nativeActivities:true,publishUI:true},
+  {id:'codex',status:'native',receiveMessages:true,sendPrompt:true,nativeActivities:true,publishUI:true},
+  {id:'qwen',status:'native',receiveMessages:true,sendPrompt:true,nativeActivities:true,publishUI:false},
   {id:'workbuddy',status:'publish-only',receiveMessages:false,sendPrompt:false,nativeActivities:false,publishUI:true},
+  {id:'workbuddy',status:'native',receiveMessages:true,sendPrompt:true,nativeActivities:true,publishUI:false},
  {id:'generic',status:'publish-only',receiveMessages:false,sendPrompt:false,nativeActivities:false,publishUI:true,clients:['Codex','Claude Code','WorkBuddy','Qwen办公','其他能执行本机Node命令的Agent']}
 ]);
 export const contract=()=>({protocol:PROTOCOL,commands:COMMANDS,adapters:ADAPTERS,limits:{eventBytes:19000},receipt:{accepted:'连接器数据投影已接收',applied:'浏览器已导航/渲染；非平台保存',deferred:'浏览器因阅读保护或访客模式延迟',failed:'目标或渲染失败'}});

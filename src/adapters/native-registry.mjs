@@ -8,7 +8,7 @@ export function nativeCapabilities(adapter,agent={ready:true}){
 const unavailable=()=>({ready:false,version:null,message:'该原生来源暂不可用；未启动或重启客户端。'});
 export function createNativeRegistry({primary,additional=[]}={}){
  if(!primary?.health||!Array.isArray(additional))throw Error('需要明确原生主适配器');const entries=[primary,...additional],providers=new Map(),health=new Map(),watchers=new Set();let closed=false;
- const provider=a=>a.descriptor?.id||'opencode';
+ const provider=a=>a.descriptor?.id||'unknown';
  for(const a of entries){const id=provider(a);if(!/^[a-z][a-z0-9-]{0,39}$/.test(id)||!a?.health||providers.has(id)||id==='workbuddy'&&a.descriptor.status!=='native')throw Error('原生适配器来源重复或无效');providers.set(id,a);}
  function forSession(id){
   if(typeof id!=='string'||!/^ses[\w-]{1,120}$/.test(id))throw Error('原生会话标识无效');

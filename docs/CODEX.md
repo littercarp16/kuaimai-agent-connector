@@ -72,7 +72,7 @@ node codex-desktop.mjs dock-disable
 3. 绑定后原生输入、公开回复与工具状态自动同步，不需要手工镜像聊天。网页补充信息使用当前原生turn，不另开第二个Agent执行相同任务。
 4. 问题与审批显示独立入口；原客户端处理后自动收起。未知结果保留不确定态，不自动重试或扩大权限。
 
-首版**不自动发现/抢切Codex新线程**，全局status不足以证明新用户意图，明确声明followSessions=false。原有OpenCode/WorkBuddy来源的自动跟随保留；Codex绑定后实时双向不受此限制。
+首版**不自动发现/抢切Codex新线程**，全局status不足以证明新用户意图，明确声明followSessions=false。原有WorkBuddy来源的自动跟随保留；Codex绑定后实时双向不受此限制。
 
 ## 能力矩阵
 
@@ -97,8 +97,8 @@ node codex-desktop.mjs dock-disable
 
 - [`codex-rpc.mjs`](../src/adapters/codex/codex-rpc.mjs) 负责只读发现 daemon 版本与 Unix Socket 上的 WebSocket 通信。规范路径核对owner/权限/实例；官方私有control末级别名有窄兼容，其它链接不放行。128请求、消息字节及ID墓碑预算，答复写背压有deadline，断开/未知不重放。
 - 接收序元信息：RPC的`orderOf(rootEventOrResult)`在解码时用WeakMap标记每连接单调顺序，不修改原JSON；用原子resume快照边界区分已覆盖与后到delta，缺少可靠证据就断开核验，不猜测丢弃。
-- [`src/adapters/codex/`](../src/adapters/codex/) 中的 `codex.mjs` 和 `codex-state.mjs` 处理原生thread/turn/item及问题/审批Map。对外`ses_codex_<UUID去横线>`，binding.nativeThreadId是真实thread.id，不冒充OpenCode或会话树sessionId。异步前后检查工作区/实例，服务重启废弃旧pending。
-- [`src/adapters/`](../src/adapters/) 中的 `native-registry.mjs` 和 `product-adapters.mjs` 负责注册 OpenCode 和 Codex。每hub保留确切adapter及能力，OC离线不禁用健康CD，空generic入口也可列出附加来源。
+- [`src/adapters/codex/`](../src/adapters/codex/) 中的 `codex.mjs` 和 `codex-state.mjs` 处理原生thread/turn/item及问题/审批Map。对外`ses_codex_<UUID去横线>`，binding.nativeThreadId是真实thread.id，与会话树 sessionId 分开。异步前后检查工作区/实例，服务重启废弃旧pending。
+- [`src/adapters/`](../src/adapters/) 中的 `native-registry.mjs` 和 `product-adapters.mjs` 按配置注册 Codex、千问办公和 WorkBuddy CLI。每个会话使用自身来源的适配器和能力，generic 发布入口也可列出已注册的原生来源。
 - [`shared-hub.mjs`](../src/session/shared-hub.mjs) 与 [`server.mjs`](../src/http/server.mjs) 处理受控审批列表及 `/v1/approval/reply`。仅当前实例/来源/代次/transport/control可提交pending单次决定。停止在body等待前后、调用前及返回后核验来源，旧请求不能误停新轮次。
 - `agent/approval-panel.js`：紧凑待审批入口、点击展开、明确单次操作、观察禁答、普通事件不重建按钮或丢键盘焦点，不把resolved称业务成功。
 
@@ -116,17 +116,17 @@ node codex-desktop.mjs dock-disable
 
 普通公开工具正文在512000字节预算内完整展示，genuine MCP的arguments、text、structuredContent及安全错误不再因unknown工具名整体隐藏。私有`_meta`、明确binary、私有推理有省略原因；普通业务analysis/metadata与JSON大整数原文/空白/无凭据URL保真。原生调用名出现在摘要，参数和完整返回不进广播。详情过滤预算与收尾验证见[CLOSEOUT.md](CLOSEOUT.md)。
 
-主入口注册可用Codex，日常发现时未运行就显示不可用而不代启动；上述显式桌面端切换操作及用户启用的 Dock 登录任务可以启动 daemon。测试/明确禁用可设置`KM_AGENT_DISABLE_CODEX=1`，同时禁用发现与桌面端切换；已独立安装的 Dock 登录任务需用 `dock-disable` 关闭。启动参数仍保留opencode/generic主适配器合同。
+主入口注册可用Codex，日常发现时未运行就显示不可用而不代启动；上述显式桌面端切换操作及用户启用的 Dock 登录任务可以启动 daemon。测试/明确禁用可设置`KM_AGENT_DISABLE_CODEX=1`，同时禁用发现与桌面端切换；已独立安装的 Dock 登录任务需用 `dock-disable` 关闭。旧启动入口只接受 generic 发布适配器。
 
 ### 原生来源使用不同工作区
 
-当用户明确Codex运行在另一项目时，不应要求重开任务，也不能把OC/WB的工作区一起改掉。产品自有私有配置`~/.config/kuaimai-agent/native-sources.json`可声明独立范围（不是厂商配置，不由网页任意写入）：
+当用户明确Codex运行在另一项目时，不应要求重开任务，也不能把WorkBuddy的工作区一起改掉。产品自有私有配置`~/.config/kuaimai-agent/native-sources.json`可声明独立范围（不是厂商配置，不由网页任意写入）：
 
 ```json
 {"version":1,"profiles":[{"endpoint":"http://127.0.0.1:17653","origin":"http://127.0.0.1:4173","workspaceRoot":"<原Connector规范工作区>","codexWorkspace":"<用户明确的Codex规范目录>"}]}
 ```
 
-只匹配精确endpoint、origin和workspaceRoot；其它profile保持原样。文件须自有普通0600、父0700，拒绝链接/未知字段/重复profile/非本机端点/无效目录；未配置保留原默认，非法配置只禁用Codex，不回退错误目录或阻断OC/WB。main在启动时加载，环境`KM_AGENT_NATIVE_SOURCES_FILE`可由本机操作者显式指定配置文件；测试禁Codex时不读取用户真实配置。保持原bootstrap/MCP种子启动合同，不为此改厂商设置或全局技能。
+只匹配精确endpoint、origin和workspaceRoot；其它profile保持原样。文件须自有普通0600、父0700，拒绝链接/未知字段/重复profile/非本机端点/无效目录；未配置保留原默认，非法配置只禁用Codex，不回退错误目录或阻断WorkBuddy。main在启动时加载，环境`KM_AGENT_NATIVE_SOURCES_FILE`可由本机操作者显式指定配置文件；测试禁Codex时不读取用户真实配置。保持原bootstrap/MCP种子启动合同，不为此改厂商设置或全局技能。
 
 ## 验证分层
 

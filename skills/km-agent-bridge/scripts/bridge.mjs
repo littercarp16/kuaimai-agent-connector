@@ -17,22 +17,22 @@ async function post(data,path,body){if(Buffer.byteLength(JSON.stringify(body))>1
 export async function run(args){
  const [command='help',...flags]=args,options={};for(let i=0;i<flags.length;i++){const key=flags[i];if(['--allow-control','--pin-session'].includes(key)){options[key]=true;continue;}if(!['--config','--session','--file','--id','--out','--adapter','--origin','--port'].includes(key)||!flags[i+1]||options[key]!==undefined)fail('ARGUMENT','参数无效或重复');options[key]=flags[++i];}
  const catalog=JSON.parse(await readFile(new URL('../references/commands.json',import.meta.url),'utf8'));
- if(['help','--help'].includes(command))return{usage:'node <技能目录>/scripts/bridge.mjs commands | demo --out <新目录> | status | doctor | publish --session <sesID> --file <事件JSON> | receipt --session <sesID> --id <事件ID> | start --session <sesID> --adapter opencode|generic --origin <精确Origin> [--allow-control] [--pin-session] [--port 17653]\n连接命令使用--config <配置JSON>或KM_AGENT_BRIDGE_CONFIG。commands/demo无需连接配置。',notice:'安装/启动/接收/浏览器应用/平台保存是不同状态；不自动重试或扩大权限。'};
+ if(['help','--help'].includes(command))return{usage:'node <技能目录>/scripts/bridge.mjs commands | demo --out <新目录> | status | doctor | publish --session <sesID> --file <事件JSON> | receipt --session <sesID> --id <事件ID> | start --session <sesID> --adapter generic --origin <精确Origin> [--pin-session] [--port 17653]\n连接命令使用--config <配置JSON>或KM_AGENT_BRIDGE_CONFIG。commands/demo无需连接配置。',notice:'安装/启动/接收/浏览器应用/平台保存是不同状态；不自动重试或扩大权限。'};
  if(command==='commands')return catalog;
  if(command==='demo'){if(!options['--out'])fail('OUTPUT_REQUIRED','演示生成需--out指定全新目录');const{prepareDemo}=await import('./demo.mjs');return prepareDemo(resolve(options['--out']));}
  if(!['status','doctor','publish','receipt','start'].includes(command))fail('COMMAND','未知命令');
  const cfg=await config(options);
  if(command==='start'){
   const id=options['--session'],adapter=options['--adapter'];
-  if(!/^ses[\w-]{1,120}$/.test(id||'')||!['opencode','generic'].includes(adapter))fail('START_ARGUMENT','启动需明确会话及opencode或generic适配器');
-  if(adapter==='generic'&&options['--allow-control'])fail('CONTROL_UNSUPPORTED','generic仅发布UI，不提供厂商原生双向控制');
+  if(!/^ses[\w-]{1,120}$/.test(id||'')||adapter!=='generic')fail('START_ARGUMENT','启动需明确会话并指定 generic 发布适配器');
+  if(options['--allow-control'])fail('CONTROL_UNSUPPORTED','generic仅发布UI，不提供厂商原生双向控制');
   if(!cfg.launcher)fail('LAUNCHER_REQUIRED','需由产品提供独立运行时启动入口，不从技能目录推导');
   const trust=origin(options['--origin']||cfg.origin),port=options['--port']||'17653';
   if(!/^\d+$/.test(port)||Number(port)<1024||Number(port)>65535)fail('PORT','端口无效');
   if(await portOccupied(port))fail('ALREADY_RUNNING','该端口已有服务，不启动第二个连接器、不停止旧进程');
   const info=await lstat(cfg.launcher);
   if(!info.isFile()||info.isSymbolicLink()||!cfg.launcher.endsWith('.mjs'))fail('LAUNCHER_INVALID','启动入口必须为产品提供的本机普通mjs文件');
-  const argv=[cfg.launcher,'--adapter',adapter,'--session',id,'--trust-origin',trust,'--port',port,...(options['--allow-control']?['--allow-control']:[]),...(options['--pin-session']?['--pin-session']:[])];
+  const argv=[cfg.launcher,'--adapter',adapter,'--session',id,'--trust-origin',trust,'--port',port,...(options['--pin-session']?['--pin-session']:[])];
   try{await promisify(execFile)(process.execPath,argv,{cwd:dirname(cfg.launcher),timeout:15000,maxBuffer:64000});}catch{fail('START_UNKNOWN','启动未获完整确认；请检查产品运行时，不自动重启或重复启动');}
   return{launchCommandCompleted:true,browserVerified:false,notice:'启动入口已返回；仍需status/doctor及网页实际握手核验。没有启动或重启Agent模型服务。'};
  }

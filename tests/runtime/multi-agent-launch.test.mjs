@@ -12,7 +12,7 @@ import {parseLaunchOptions} from '../../src/runtime/launch-options.mjs';
 const exec=promisify(execFile),origin='http://127.0.0.1:4173';
 const unusedPort=async()=>{const server=createServer();server.listen(0,'127.0.0.1');await once(server,'listening');const port=server.address().port;await new Promise(r=>server.close(r));return port;};
 
-test('trusted origin may start observation-only without session; control still requires explicit native session',()=>{
+test('trusted origin may start observation-only without session; generic publishing never grants native control',()=>{
   const config=parseLaunchOptions(['--adapter','generic','--trust-origin',origin,'--workspace','/authorized/workspace']);
   assert.equal(config.sessionId,null);assert.equal(config.auto,true);assert.equal(config.allowControl,false);assert.equal(config.workspace,'/authorized/workspace');
   assert.equal(parseLaunchOptions([]).workspace,undefined);
@@ -20,7 +20,7 @@ test('trusted origin may start observation-only without session; control still r
   assert.throws(()=>parseLaunchOptions(['--workspace','/bad\0path']),/工作区|目录/);
   assert.throws(()=>parseLaunchOptions(['--trust-origin',origin,'--allow-control']),/控制|会话/);
   assert.throws(()=>parseLaunchOptions(['--adapter','generic','--session','ses_a','--allow-control']),/控制/);
-  assert.equal(parseLaunchOptions(['--session','ses_a','--allow-control']).allowControl,true);
+  assert.throws(()=>parseLaunchOptions(['--session','ses_a','--allow-control']),/控制/);
 });
 
 test('main explicitly enables multi-agent follow, keeps WB publishing independent of native readiness, and passes workspace to adapter',async()=>{

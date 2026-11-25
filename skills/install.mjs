@@ -3,7 +3,7 @@ import{readFile,lstat,realpath,readdir,mkdir,writeFile}from'node:fs/promises';
 import{resolve,join,dirname,relative}from'node:path';import{fileURLToPath}from'node:url';import{homedir}from'node:os';
 
 const source=fileURLToPath(new URL('./',import.meta.url));
-const profiles={opencode:{project:'.opencode/skills',user:()=>join(process.env.XDG_CONFIG_HOME||join(homedir(),'.config'),'opencode/skills')},'claude-code':{project:'.claude/skills',user:()=>join(homedir(),'.claude/skills')},codex:{project:'.agents/skills',user:()=>join(homedir(),'.agents/skills')},cursor:{project:'.cursor/skills',user:()=>join(homedir(),'.cursor/skills')},qoder:{project:'.qoder/skills',user:()=>join(homedir(),'.qoder/skills')}};
+const profiles={'claude-code':{project:'.claude/skills',user:()=>join(homedir(),'.claude/skills')},codex:{project:'.agents/skills',user:()=>join(homedir(),'.agents/skills')},cursor:{project:'.cursor/skills',user:()=>join(homedir(),'.cursor/skills')},qoder:{project:'.qoder/skills',user:()=>join(homedir(),'.qoder/skills')}};
 class InstallError extends Error{constructor(code,message){super(message);this.code=code;}}
 const fail=(code,message)=>{throw new InstallError(code,message);};
 async function exists(path){try{return await lstat(path);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
@@ -11,7 +11,7 @@ async function noLinks(path){for(let p=resolve(path);;p=dirname(p)){if((await ex
 async function inventory(path){const result=[];async function walk(dir,prefix=''){for(const entry of await readdir(dir,{withFileTypes:true})){const name=prefix+entry.name;if(entry.isSymbolicLink())fail('SYMLINK','已有技能包含符号链接，不覆盖');if(entry.isDirectory())await walk(join(dir,entry.name),name+'/');else result.push(name);}}await walk(path);return result.sort();}
 
 export async function install(args){
- if(args.includes('--help')||args.length===0)return{usage:'node install.mjs --agent opencode|claude-code|codex|cursor|qoder --scope project --project <目录> [--dry-run]\nnode install.mjs --agent opencode --scope user [--dry-run]\nnode install.mjs --agent <其他Agent> --target <其实际skills目录> [--dry-run]',notice:'仅安装技能；不启动服务，不安装依赖，不修改Agent配置，不覆盖不同内容。--target指skills父目录。'};
+ if(args.includes('--help')||args.length===0)return{usage:'node install.mjs --agent claude-code|codex|cursor|qoder --scope project --project <目录> [--dry-run]\nnode install.mjs --agent codex --scope user [--dry-run]\nnode install.mjs --agent <其他Agent> --target <其实际skills目录> [--dry-run]',notice:'仅安装技能；不启动服务，不安装依赖，不修改Agent配置，不覆盖不同内容。--target指skills父目录。'};
  const options={};for(let i=0;i<args.length;i++){const key=args[i];if(key==='--dry-run'){options.dryRun=true;continue;}if(!['--agent','--scope','--project','--target'].includes(key)||!args[i+1]||options[key]!==undefined)fail('ARGUMENT','安装参数无效或重复');options[key]=args[++i];}
  if(options['--target']&&(options['--scope']||options['--project']))fail('ARGUMENT','--target不能与scope/project混用');
  let parent,base;const agent=options['--agent']||'custom';

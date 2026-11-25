@@ -9,8 +9,9 @@
   const read = (storage, key) => { try { return JSON.parse(storage.getItem(key)); } catch { return null; } };
   const random = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
   const validEndpoint = value => { try { const u = new URL(value); return u.origin === value && u.protocol === 'http:' && u.hostname === '127.0.0.1' && Number(u.port) >= 1024 && !u.username && !u.password; } catch { return false; } };
-  const validGrant = value => value && validEndpoint(value.endpoint) && typeof value.instanceId === 'string' && code.test(value.reconnectToken || '') && value.expiresAt > Date.now();
-  const validPending = value => value && code.test(value.state || '') && code.test(value.verifier || '') && Date.now() - value.created < requestTtlMs;
+  const validProvider = provider => provider === undefined || ['codex', 'qwen', 'workbuddy'].includes(provider);
+  const validGrant = value => value && validProvider(value.provider) && validEndpoint(value.endpoint) && typeof value.instanceId === 'string' && code.test(value.reconnectToken || '') && value.expiresAt > Date.now();
+  const validPending = value => value && validProvider(value.provider) && code.test(value.state || '') && code.test(value.verifier || '') && Date.now() - value.created < requestTtlMs;
   const needsExtension = ['http://lt.com:8085', 'http://local.lt.com:8251'].includes(location.origin);
   const extensionHint = '此 HTTP 页面需要“快麦本地 Agent 连接”扩展。请让 Agent 执行最新连接请求，安装扩展后刷新本页。';
   let extensionConnection;
@@ -176,7 +177,7 @@
       pending.catch(() => {}); return pending;
     }
     function prepare({ onRequest = () => {}, provider, desktopApp = false } = {}) {
-      if (provider !== undefined && !['codex', 'qwen', 'workbuddy'].includes(provider)) throw Error('不支持的 Agent');
+      if (!validProvider(provider)) throw Error('不支持的 Agent');
       controller?.abort(); session?.detach(); session = null; controller = new AbortController();
       const value = { state:random(), verifier:random(), created:Date.now(), ...(provider && { provider }), ...(desktopApp && { desktopApp: true }) }, origin = location.origin;
       const url = 'km-agent://connect?' + new URLSearchParams({ origin, callback:origin+'/agent/connect-callback.html', state:value.state,

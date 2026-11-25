@@ -65,3 +65,17 @@ test('cancel and retry in the same tick never reuse an aborted pending promise o
   try { await retry; assert.equal(f.states.at(-1).phase, 'connected'); assert.ok(!f.states.some(s => s.phase === 'error')); }
   finally { f.client.close(); }
 });
+
+test('a retired provider cannot resume a grant or pending request as Codex', async () => {
+  const f = fixture();
+  f.sessionStorage.setItem('km-agent.code.pending', JSON.stringify({
+    provider: 'opencode', state: 's'.repeat(43), verifier: 'v'.repeat(43), created: Date.now(),
+  }));
+  f.sessionStorage.setItem('km-agent.code.direct-grant', JSON.stringify({
+    provider: 'opencode', endpoint: 'http://127.0.0.1:17653', instanceId: 'instance-1',
+    reconnectToken: 'r'.repeat(43), expiresAt: Date.now() + 60000,
+  }));
+  assert.equal(f.client.hasSaved(), false);
+  await assert.rejects(f.client.connect(), /复制最新连接请求/);
+  assert.deepEqual(f.calls, []);
+});

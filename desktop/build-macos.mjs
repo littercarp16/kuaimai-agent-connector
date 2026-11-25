@@ -20,7 +20,7 @@ try{const existing=await readFile(join(out,'.km-agent-build'),'utf8');if(existin
 catch(error){if(error.code!=='ENOENT')throw error;if((await readdir(out)).length)throw Error('Output directory is not empty; choose a dedicated build directory');await writeFile(join(out,'.km-agent-build'),root+'\n');}
 await rm(app,{recursive:true,force:true});await mkdir(join(app,'Contents/MacOS'),{recursive:true});await mkdir(join(resources,'bin'),{recursive:true});await mkdir(runtime,{recursive:true});
 await cp(join(root,'desktop/macos/Info.plist'),join(app,'Contents/Info.plist'));await cp(join(root,'desktop/origins.json'),join(resources,'origins.json'));await cp(node,join(resources,'bin/node'));await chmod(join(resources,'bin/node'),0o755);
-const directories=['src','workspace','web'];
+const directories=['src','web'];
 for(const directory of directories)await cp(join(root,directory),join(runtime,directory),{recursive:true,filter:path=>!path.endsWith('.DS_Store')&&!/\.test\.mjs$/.test(path)});
 await mkdir(join(runtime,'skills/km-agent-bridge/scripts'),{recursive:true});
 await cp(join(root,'skills/km-agent-bridge/scripts/prepare.mjs'),join(runtime,'skills/km-agent-bridge/scripts/prepare.mjs'));

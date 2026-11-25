@@ -7,7 +7,7 @@ import { serviceLease, serviceProfile } from '../runtime/service-instance.mjs';
 import { readConfigFile, validLoopbackOrigin } from '../../skills/km-agent-bridge/scripts/prepare.mjs';
 
 if (process.argv.includes('--help')) {
-  console.log('node start.mjs --adapter opencode|generic --trust-origin http://127.0.0.1:4173 [--allow-origin https://another-app.example] [--session <ses...>] [--workspace /绝对工作目录] [--allow-control] [--pin-session] [--port 17653]\n启动后台连接器；首选端口占用时自动分配空闲端口，重复调用复用相同配置的实例。');
+  console.log('node start.mjs --adapter generic --trust-origin http://127.0.0.1:4173 [--allow-origin https://another-app.example] [--session <ses...>] [--workspace /绝对工作目录] [--pin-session] [--port 17653]\n启动后台连接器；首选端口占用时自动分配空闲端口，重复调用复用相同配置的实例。');
   process.exit(0);
 }
 try {

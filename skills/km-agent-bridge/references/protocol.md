@@ -58,13 +58,13 @@ phase用于简短公开行动；技能/工具仅记录实际发生的调用，�
 
 ## 网页输入能力（不是本机发布指令）
 
-在支持的OpenCode原生适配器中，`/new`显式创建同工作区真实新会话，`/sessions`切换，`/stop`请求停止，`/help`帮助；不把这些词原文发给模型。新建不停止/删除旧聊天、不自动发prompt，保留原权限；自动跟随其他会话仍默认观察。
+在支持这些命令的原生适配器中，`/new`显式创建同工作区真实新会话，`/sessions`切换，`/stop`请求停止，`/help`帮助；不把这些词原文发给模型。新建不停止/删除旧聊天、不自动发prompt，保留原权限；自动跟随其他会话仍默认观察。
 
 `@`搜索授权工作区文件，仅发送时读取所选正文；图片/文件支持选择、粘贴、拖入、移除。上传+引用最多5项、单项2MiB、合计6MiB，支持受限图片、PDF、UTF-8文本/代码；不宣称所有Office文件可解析。拒绝敏感/隐藏/越界/目录及外部符号链接。文件只在用户点击发送后提交原生模型，SSE仅名称/MIME。费用勾选移除不等于工具自动授权；模型格式支持/额度及解读质量另行核验。generic不因此获得网页反向输入。
 
 ## Questions与“使用”（运行时/网页能力，不是本机发布指令）
 
-原生OpenCode支持时，`capabilities.nativeQuestions`声明表单能力：`run.questions`带`{id,sessionId,title,questions:[{key,header,question,options:[{value,label,description}],multiple,custom,required}]}`。多题用选项卡，单选/多选/自由输入；选项提交value，不是label。对应已核实的V2 `session.form.list/get/reply/cancel`，不是把答案作为新prompt。网页`POST /v1/question/reply {instanceId,sessionId,questionId,answers:string[][]}`，拒绝为`/v1/question/reject`；需要原网页控制授权、同实例同绑定且原生仍pending。关闭只暂缓，不自动拒绝；不同实例/会话的迟到回调不改变新问题。当前不覆盖任意子Agent关联链，不给generic虚构原生问答。技能bridge.mjs没有新增问答子命令，Agent可在本机原生端正常询问，不绕过用户网页回答。
+原生来源支持时，`capabilities.nativeQuestions`声明表单能力：`run.questions`带`{id,sessionId,title,questions:[{key,header,question,options:[{value,label,description}],multiple,custom,required}]}`。多题用选项卡，单选/多选/自由输入；选项提交value，不是label。网页`POST /v1/question/reply {instanceId,sessionId,questionId,answers:string[][]}`，拒绝为`/v1/question/reject`；需要原网页控制授权、同实例同绑定且原生仍pending。关闭只暂缓，不自动拒绝；不同实例/会话的迟到回调不改变新问题。当前不覆盖任意子Agent关联链，不给generic虚构原生问答。技能bridge.mjs没有新增问答子命令，Agent可在本机原生端正常询问，不绕过用户网页回答。
 
 技能/subagent/task详情按需鉴权读取正常完整请求、技能正文和公开返回（512KB原文上限内），不再整段用占位句代替；密钥/内部逐字推理仍过滤，不进入SSE。其他普通工具仍有预览上限；超限明确提示，不宣称完整。
 
@@ -72,6 +72,6 @@ phase用于简短公开行动；技能/工具仅记录实际发生的调用，�
 
 ## WorkBuddy本机MCP与自动准备（1.3.0）
 
-已配置MCP时优先按[WorkBuddy流程](workbuddy.md)用五个工具建立独立逻辑任务，不起第二generic服务，不借OpenCode sesID。网页只接收公开phase/过程与渐进成果，不是原生全量镜像；输入、问答、审批、停止留在WorkBuddy。每任务私有票据由MCP客户端管理，不加进工具参数或对话。accepted不等于applied；历史超出窗口可deferred，不能冒称全部正文可见。明确ready后才可finish或手动“使用”；finish不会自动补ready，不表示平台保存。
+已配置MCP时优先按[WorkBuddy流程](workbuddy.md)用五个工具建立独立逻辑任务，不起第二generic服务，不借其他来源的 sesID。网页只接收公开phase/过程与渐进成果，不是原生全量镜像；输入、问答、审批、停止留在WorkBuddy。每任务私有票据由MCP客户端管理，不加进工具参数或对话。accepted不等于applied；历史超出窗口可deferred，不能冒称全部正文可见。明确ready后才可finish或手动“使用”；finish不会自动补ready，不表示平台保存。
 
 按[自动准备](automatic.md)由稳定种子先探测、安装或启动运行时；浏览器不直接执行系统命令。新版multiAgentFollow支持跨来源自动查看，不因普通执行繁忙阻塞，但问题/提交在途暂缓；原生订阅有限保留，旧Agent继续独立发布，不混入当前时间线。手选锁定、可恢复，按已接入Agent分组。新源不继承写权限；未配置可信下载源不伪造成功，启动未知不重试。

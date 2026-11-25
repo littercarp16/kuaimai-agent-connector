@@ -13,7 +13,7 @@ export function createFollowManager({adapter,autoTrust,clients,bind,push,now=Dat
   finally{state.switching=false;if(authorized(c)){push(c);void drain(c);}}
  }
  function offer(candidate,onlyClient=null){if(closed||!/^ses[\w-]{1,120}$/.test(candidate?.id||''))return;
-  const provider=candidate.provider||adapter.descriptor?.id||'opencode';if(provider==='workbuddy'&&(!enableMultiAgentFollow||!workBuddy))return;
+  const provider=candidate.provider||adapter.descriptor?.id||'unknown';if(provider==='workbuddy'&&(!enableMultiAgentFollow||!workBuddy))return;
    const observedOrder=Number.isSafeInteger(candidate.observedOrder)&&candidate.observedOrder>0?candidate.observedOrder:nextSourceOrder();
    const jobs=[];for(const c of onlyClient?[onlyClient]:clients())if(authorized(c)){const state=c.follow;if(enableMultiAgentFollow){if(observedOrder<=state.latestOrder)continue;state.latestOrder=observedOrder;}if(c.hub?.session.id===candidate.id){if(enableMultiAgentFollow){++state.epoch;state.pending=[];push(c);}continue;}if(enableMultiAgentFollow&&state.switching)++state.epoch;state.pending=state.pending.filter(x=>x.id!==candidate.id);state.pending.push({id:candidate.id,title:String(candidate.title||'绫通操作会话').slice(0,100),reason:provider==='workbuddy'?(candidate.reason==='cached-task'?'cached-task':'task-open'):candidate.reason==='command'?'command':'prompt',at:candidate.observedAt??candidate.createdAt??now(),...(enableMultiAgentFollow?{provider,...(candidate.status?{status:candidate.status}:{})}:{})});state.pending=state.pending.slice(-5);push(c);jobs.push(drain(c));}return Promise.all(jobs);
  }

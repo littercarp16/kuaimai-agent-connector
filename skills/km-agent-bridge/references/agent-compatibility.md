@@ -1,12 +1,11 @@
 # Agent安装与能力边界
 
-目录安装只解决技能发现，不改变连接器适配能力。OpenCode与新版连接器中的Codex CLI共享daemon可走各自原生双向（[Codex边界](codex.md)）；WorkBuddy走独立MCP协作发布，不镜像原生会话；其余Agent在具备本机Node执行能力时可通过generic发布UI。云端/远程Agent不能访问用户电脑loopback时，不能声称本地接入完成。Codex Desktop/IDE不能仅凭共享历史就当作同daemon。
+目录安装只解决技能发现，不改变连接器适配能力。Codex CLI 共享 daemon 支持原生双向通信（[Codex边界](codex.md)）；千问办公和 WorkBuddy CLI 支持在网页绑定原生会话并收发消息。WorkBuddy 的独立 MCP 入口用于协作发布；其余Agent在具备本机Node执行能力时可通过generic发布UI。云端/远程Agent不能访问用户电脑loopback时，不能声称本地接入完成。Codex Desktop/IDE不能仅凭共享历史就当作同daemon。
 
 本页的`--agent/--target`指**外层分发包安装器**参数，不是bridge.mjs子命令。已安装的技能目录不携带安装器；若只有技能目录，由宿主CLI/客户端导入，或复制完整目录到其技能位置，不编造安装命令。
 
 | 安装器agent | 项目级skills目录 | 用户级skills目录 | 发现依据/限制 |
 | --- | --- | --- | --- |
-| opencode | .opencode/skills | $XDG_CONFIG_HOME/opencode/skills或~/.config/opencode/skills | V2官方文档；另会兼容发现.agents/.claude目录，需检查同名覆盖 |
 | claude-code | .claude/skills | ~/.claude/skills | 官方文档；终端本机技能，不等于Cowork或云端已同步 |
 | cursor | .cursor/skills | ~/.cursor/skills | 官方文档；不自动同步到云端 |
 | qoder | .qoder/skills | ~/.qoder/skills | Qoder CLI官方文档；其其他产品版本单独核验 |
@@ -16,7 +15,6 @@
 
 官方参考（核对于2026-11-03，不等于在每款客户端实机验收）：
 
-- OpenCode V2：https://opencode.ai/v2/docs/skills
 - Claude Code：https://code.claude.com/docs/en/skills
 - Cursor：https://cursor.com/docs/context/skills
 - Qoder CLI：https://docs.qoder.com/cli/Skills

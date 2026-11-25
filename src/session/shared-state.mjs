@@ -78,7 +78,7 @@ export function createProjection(sessionId) {
       if(value.status==='failed'){
         if(d.failureCode==='workbuddy_refusal')value.error='WorkBuddy CLI 拒绝了本轮请求（refusal）。';
         else if(d.failureCode==='workbuddy_failed')value.error='WorkBuddy CLI 本轮执行失败。';
-        else value.error='OpenCode本轮执行失败，请查看本地原因。';
+        else value.error='本地 Agent 本轮执行失败，请查看本地原因。';
       }
       for(const a of activities.values())if(a.status==='running')activity({...a,status:value.status==='completed'?'completed':'failed'});
     }

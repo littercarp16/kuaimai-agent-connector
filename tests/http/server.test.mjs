@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { createOpenCodeAdapter } from '../../src/adapters/opencode/opencode.mjs';
 
 const module = await import('../../src/http/server.mjs').catch(error=>{if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;return {};});
 const origin='http://127.0.0.1:4173';
@@ -15,7 +14,7 @@ async function setup(t, adapter) {
   const pair=async()=>{const res=await request('/v1/pair',{method:'POST',body:JSON.stringify({code:'123456'})});assert.equal(res.status,200);return (await res.json()).data.token;};
   return {connector,base,request,pair};
 }
-const unavailable={health:async()=>({ready:false,version:null,message:'OpenCode 未启动'})};
+const unavailable={health:async()=>({ready:false,version:null,message:'本地 Agent 未启动'})};
 const waitFor=async condition=>{const deadline=Date.now()+3000;while(!(await condition())){if(Date.now()>deadline)throw Error('等待业务条件超时');await new Promise(r=>setTimeout(r,10));}};
 
 test('仅信任精确Origin与Host，健康响应不泄漏配对码或平台凭据',async t=>{
@@ -113,15 +112,6 @@ test('双来源和双客户端的token/SSE事件相互隔离',{timeout:5000},asy
   assert.equal((await(await request('/v1/snapshot',origin2,b)).json()).data.run,null);
   await readerA.cancel();await readerB.cancel();
 });
-test('HTTP撤销贯穿到OpenCode预检边界，解除等待后不再发模型请求',async t=>{
-  let release,prompts=0;
-  const native={server:{info:async()=>({version:'2.0.30'})},session:{create:async()=>({id:'ses_owned'}),get:()=>new Promise(r=>{release=r;}),prompt:async()=>{prompts++;},interrupt:async()=>({interrupted:true})}};
-  const adapter=createOpenCodeAdapter({discover:async()=>({url:'http://127.0.0.1:4096'}),makeClient:()=>native,headers:()=>({}),directory:'/fixed'});
-  const {request,pair}=await setup(t,adapter),token=await pair(),headers={Authorization:`Bearer ${token}`};
-  await request('/v1/run',{method:'POST',headers,body:JSON.stringify({requestId:crypto.randomUUID(),text:'x'})});await waitFor(()=>release);
-  await request('/v1/disconnect',{method:'POST',headers,body:'{}'});release({time:{}});await new Promise(r=>setImmediate(r));
-  assert.equal(prompts,0);
-});
 test('已确认未提交的取消，不被迟到的中断回执覆盖为未知',async t=>{
   let releaseSend,releaseInterrupt;
   const adapter={health:async()=>({ready:true}),createSession:async()=> 'ses_owned',send:()=>new Promise((resolve,reject)=>{releaseSend=()=>reject(Object.assign(Error('取消于提交前'),{code:'NOT_SUBMITTED'}));}),interrupt:()=>new Promise(resolve=>{releaseInterrupt=resolve;})};
@@ -132,4 +122,13 @@ test('已确认未提交的取消，不被迟到的中断回执覆盖为未知',
   releaseInterrupt({interrupted:false});await stopping;
   assert.equal((await(await request('/v1/snapshot',{headers})).json()).data.run.status,'interrupted');
   assert.equal((await request('/v1/reset',{method:'POST',headers,body:'{}'})).status,200,'确认未提交后应能新建会话');
+});
+
+test('unbound clients of the publish-only adapter must select a native session before sending', async t => {
+  const {request, pair} = await setup(t, {descriptor: {id: 'generic', status: 'publish-only'}, health: async () => ({ready: true})});
+  const headers = {Authorization: 'Bearer ' + await pair()};
+  const response = await request('/v1/run', {method: 'POST', headers, body: JSON.stringify({requestId: crypto.randomUUID(), text: 'hello'})});
+  assert.equal(response.status, 409);
+  const snapshot = await (await request('/v1/snapshot', {headers})).json();
+  assert.equal(snapshot.data.run, null);
 });

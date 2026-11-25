@@ -33,18 +33,20 @@ status返回有限绑定元信息，`browserVerified:false`；这不是在线客
 仅在用户要求本地协作、服务未运行且产品已提供启动器时：
 
 ```sh
-node "<技能目录>/scripts/bridge.mjs" start --config "<产品连接配置>" --adapter opencode --session <当前真实sesID> --origin <用户确认的精确Origin>
+node "<技能目录>/scripts/bridge.mjs" start --config "<产品连接配置>" --adapter generic --session <当前真实sesID> --origin <用户确认的精确Origin>
 ```
 
-只有用户明确允许网页反向输入时加`--allow-control`；可用`--pin-session`锁定，端口用显式`--port`。generic使用独立唯一任务标识且不加control；这不是其他厂商原生会话同步。
+可用`--pin-session`锁定，端口用显式`--port`。generic使用独立唯一任务标识且不加control；这不是其他厂商原生会话同步。
 
-产品启动器参数合同：`--adapter opencode|generic --session ... --trust-origin ... --port ...`，可选`--allow-control/--pin-session`。启动器负责后台运行、依赖和运行清单生命周期；技能不安装依赖，不修改模型服务，不杀端口进程。返回只表示启动命令已结束，仍须doctor和网页实际握手。
+产品启动器参数合同：`--adapter generic --session ... --trust-origin ... --port ...`，可选`--pin-session`。启动器负责后台运行、依赖和运行清单生命周期；技能不安装依赖，不修改模型服务，不杀端口进程。返回只表示启动命令已结束，仍须doctor和网页实际握手。
 
 启动前只对指定loopback端口做TCP占用探测，不发送HTTP、不跟随重定向；只有明确连接拒绝才允许继续。已连接、超时或其他不确定错误均阻止启动，不能把HTTP断开/错误当成端口空闲。探测与启动之间仍可能发生端口竞争，产品启动器必须保留自身的端口独占检查，不能接管已有服务。
 
 此合同适配现有连接器启动方式；**并不意味着当前运行时已具备正式产品安装、任意工作区、HTTPS部署或所有Agent原生适配**。当前启动器若拒绝某Origin/参数，应如实提示产品运行时尚不支持，不降级安全策略或猜CLI替代命令。后续CLI打包需单独提供/改造运行时，保持本技能接口稳定。
 
 ## 故障边界
+
+- RETIRED_ADAPTER：旧配置指定了 OpenCode，请在网页重新选择 Agent 并复制连接请求。
 
 - CONFIG_REQUIRED：尚无产品配置；询问真实配置位置，不回找开发目录。
 - RUNTIME_PERMISSION：凭据文件权限不符合要求；请产品正确生成，不输出密钥或自动chmod他人文件。

@@ -27,7 +27,7 @@ npm run test:agent:skills
 npm run test:agent
 npm test
 sh -n agent-connector/skills/install.sh
-sh agent-connector/skills/install.sh --agent opencode --scope project --project <独立临时目标> --dry-run
+sh agent-connector/skills/install.sh --agent codex --scope project --project <独立临时目标> --dry-run
 ```
 
 首次全绿：技能13/13、既有Agent101/101、宿主56/56。测试覆盖：dry-run零写入、项目/用户目录、未知端显式target、已安装技能自包含、同内容no-op、拒绝冲突和符号链接、无额外Agent配置写入、安全运行文件权限、loopback、过期实例、明确session、禁止在连接配置存key、真实HTTP发布/回执、generic控制拒绝及显式产品启动参数。
