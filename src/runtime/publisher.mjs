@@ -1,8 +1,13 @@
+import { readPrivateConfig } from './private-config.mjs';
 import{readFile,stat}from'node:fs/promises';import{fileURLToPath}from'node:url';
 export const RUNTIME=fileURLToPath(new URL('../../.runtime/connector.json',import.meta.url));
 export async function readRuntime(path=RUNTIME){
+ let value;
+ if (process.platform === 'win32') value = await readPrivateConfig(path, { limit: 12000 });
+ else {
  const info=await stat(path);if(!info.isFile()||(info.mode&0o077)!==0||(process.getuid&&info.uid!==process.getuid()))throw Error('运行凭据文件权限必须是当前用户0600');
- if(info.size>12000)throw Error('运行状态文件过大');const value=JSON.parse(await readFile(path,'utf8'));
+ if(info.size>12000)throw Error('运行状态文件过大');value=JSON.parse(await readFile(path,'utf8'));
+ }
  const url=new URL(value.endpoint);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.origin!==value.endpoint||url.username||url.password)throw Error('只允许固定loopback连接器端点');
  if(typeof value.key!=='string'||value.key.length<20)throw Error('本地发布授权无效');return value;
 }

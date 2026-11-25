@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, chmod, open, lstat, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { readConfigFile } from '../../skills/km-agent-bridge/scripts/prepare.mjs';
+import { readPrivateConfig } from './private-config.mjs';
 
 export function serviceProfile(config, workspace) {
   return createHash('sha256').update(JSON.stringify({ ...config, workspace,
@@ -14,7 +14,7 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) 
 export async function serviceLease(runtimePath, profile) {
   const path = runtimePath + '.lease';
   try { await lstat(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  const lease = await readConfigFile(path, { runtime: true });
+  const lease = await readPrivateConfig(path);
   if (!Number.isSafeInteger(lease.pid) || lease.pid < 1 || typeof lease.token !== 'string' || typeof lease.profile !== 'string') throw Error('连接器实例记录无效');
   if (!alive(lease.pid)) return null;
   if (lease.profile !== profile) throw Error('同一连接器配置已有其他授权范围的实例，请先关闭原实例');
@@ -35,7 +35,7 @@ export async function claimService(runtimePath, profile) {
       await delay(50);
       const before = await lstat(path).catch(() => null);
       if (!before) continue;
-      const old = await readConfigFile(path, { runtime: true });
+      const old = await readPrivateConfig(path);
       if (!Number.isSafeInteger(old.pid) || old.pid < 1) throw Error('连接器实例记录无效');
       if (alive(old.pid)) throw Error('连接器已经运行或正在启动');
       // Elect exactly one stale-record cleaner; other starters wait for it.
@@ -53,7 +53,7 @@ export async function claimService(runtimePath, profile) {
     finally { await handle.close(); }
     return async () => {
       try {
-        const info = await lstat(path), data = await readConfigFile(path, { runtime: true });
+        const info = await lstat(path), data = await readPrivateConfig(path);
         if (info.ino === identity.ino && info.dev === identity.dev && data.token === token) await unlink(path);
       } catch {}
     };

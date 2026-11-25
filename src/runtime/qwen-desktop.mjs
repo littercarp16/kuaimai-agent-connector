@@ -1,5 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { join, dirname } from 'node:path';
+import { once } from 'node:events';
+import { windowsCommand, windowsPathAccess } from './windows.mjs';
 import { stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -16,18 +19,51 @@ const fail = message => { throw new QwenDesktopFailure(409, message); };
 export function createQwenDesktopRuntime({ run = exec, connect = connectQwenDesktop,
   platform = process.platform, uid = process.getuid?.() } = {}) {
   const command = (file, args, timeout = 10000) => run(file, args, { encoding: 'utf8', timeout, maxBuffer: 1024 * 1024, shell: false });
+  let windowsExe;
+  async function resolveWindowsApp() {
+    const parents = [process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs'), process.env.ProgramFiles].filter(Boolean);
+    const paths = [process.env.KM_AGENT_QWEN_EXE, ...parents.flatMap(parent =>
+      ['QwenWorkCN', 'qwen-work-cn', '千问办公'].flatMap(folder =>
+        ['QwenWorkCN.exe', '千问办公.exe'].map(name => join(parent, folder, name))))];
+    for (const file of paths.filter(Boolean)) {
+      if (!(await stat(file).catch(() => null))?.isFile()) continue;
+      await windowsPathAccess(file, { program: true, privateData: false });
+      await verifyArchive(join(dirname(file), 'resources', 'app.asar'));
+      return file;
+    }
+    fail('未找到千问办公，请将 KM_AGENT_QWEN_EXE 设为客户端 exe 的完整路径');
+  }
+  async function verifyArchive(archive) {
+    let tail = '';
+    for await (const chunk of createReadStream(archive)) {
+      const value = tail + chunk.toString('latin1');
+      if (value.includes('QWENWORK_DESKTOP_CONTROL_ENABLED')) return;
+      tail = value.slice(-64);
+    }
+    fail('此千问版本不支持已验证的本机 HTTP 启动方式');
+  }
+  const windowsProcess = async quit => {
+    const { stdout } = await windowsCommand(`
+      $current=[Diagnostics.Process]::GetCurrentProcess().SessionId
+      $found=@(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($env:KM_WIN_APP)) -ErrorAction SilentlyContinue |
+        Where-Object { $_.SessionId -eq $current -and $_.Path -eq $env:KM_WIN_APP })
+      if ($env:KM_WIN_QUIT -eq '1') {
+        foreach ($p in $found) { if ($p.MainWindowHandle -ne 0) { [void]$p.CloseMainWindow() } }
+      }
+      $found.Count`, { KM_WIN_APP: windowsExe, KM_WIN_QUIT: quit ? '1' : '0' });
+    return Number(stdout.trim()) > 0;
+  };
   return {
     async check() {
-      if (platform !== 'darwin') fail('自动准备千问目前仅支持 macOS');
+      if (platform === 'win32') {
+        // Only discover the executable if the native endpoint needs to be started.
+        if (!(await this.inspect()).available) windowsExe = await resolveWindowsApp();
+        return;
+      }
+      if (platform !== 'darwin') fail('自动准备千问目前支持 macOS 和 Windows');
       try { if (!(await stat(`${APP}/Contents/MacOS/QwenWorkCN`)).isFile()) throw Error(); }
       catch { fail('请先安装 /Applications/QwenWorkCN.app'); }
-      let tail = '', supported = false;
-      for await (const chunk of createReadStream(`${APP}/Contents/Resources/app.asar`)) {
-        const value = tail + chunk.toString('latin1');
-        if (value.includes('QWENWORK_DESKTOP_CONTROL_ENABLED')) { supported = true; break; }
-        tail = value.slice(-64);
-      }
-      if (!supported) fail('此千问版本不支持已验证的本机 HTTP 启动方式');
+      await verifyArchive(`${APP}/Contents/Resources/app.asar`);
     },
     async inspect() {
       try {
@@ -45,14 +81,24 @@ export function createQwenDesktopRuntime({ run = exec, connect = connectQwenDesk
       }
     },
     async isRunning() {
+      if (platform === 'win32') {
+        windowsExe ||= await resolveWindowsApp();
+        return windowsProcess(false);
+      }
       const { stdout } = await command('/bin/ps', ['-axo', 'uid=,pid=,comm=']);
       return stdout.split('\n').some(line => {
         const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
         return match && Number(match[1]) === uid && match[3] === `${APP}/Contents/MacOS/QwenWorkCN`;
       });
     },
-    quit: () => command('/usr/bin/osascript', ['-e', `tell application "${APP}" to quit`], 15000),
+    quit: () => platform === 'win32' ? windowsProcess(true) : command('/usr/bin/osascript', ['-e', `tell application "${APP}" to quit`], 15000),
     async open() {
+      if (platform === 'win32') {
+        windowsExe ||= await resolveWindowsApp();
+        const child = spawn(windowsExe, [], { cwd: dirname(windowsExe), detached: true, stdio: 'ignore',
+          env: { ...process.env, QWENWORK_DESKTOP_CONTROL_ENABLED: '1' } });
+        await once(child, 'spawn'); child.unref(); return;
+      }
       for (let attempt = 0; attempt < 3; attempt++) {
         try { await command('/usr/bin/open', ['-a', APP, '--env', FLAG]); return; }
         catch (error) { if (attempt === 2 || !/(?:error|Code)\s*[=:]?\s*-600\b/i.test(error.stderr || '')) throw error; await delay(500); }

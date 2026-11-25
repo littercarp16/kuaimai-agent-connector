@@ -63,6 +63,15 @@ export async function probeDesktopSocket(url) {
 export function createCodexDesktopRuntime({ run = exec, discover = discoverCodexDaemon,
   probeApp = supportsDaemon, platform = process.platform, env = process.env, uid = process.getuid?.(),
   home = homedir(), sleep = delay, probeSocket = probeDesktopSocket } = {}) {
+  if (platform === 'win32') {
+    return {
+      cliOnly: true,
+      async check() {
+        const result = await discover();
+        if (!result.ready) fail(409, result.message || '请先安装 Windows 原生 Codex CLI');
+      },
+    };
+  }
   let preparedSocketUrl = null;
   const command = (file, args, timeout = 10000) => run(file, args, {
     encoding: 'utf8', timeout, maxBuffer: 1024 * 1024, shell: false,
@@ -171,6 +180,12 @@ export function createCodexDesktopManager({ runtime = createCodexDesktopRuntime(
     try {
       assertAllowed();
       await runtime.check();
+      if (runtime.cliOnly) {
+        assertAllowed();
+        Object.assign(value, { state: 'completed', action: 'reuse', stage: 'cli-ready',
+          transportAfter: 'stdio', message: 'Windows Codex CLI 已就绪，可选择会话' });
+        return;
+      }
       value.stage = 'checking-transport';
       let transport = await inspect();
       assertAllowed();

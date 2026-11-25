@@ -1,9 +1,10 @@
 import { readFile, lstat, rename, mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { VERSION, dataRoot, privateDirectory } from './service.mjs';
+import { windowsPathAccess } from '../runtime/windows.mjs';
 import { claimService } from '../runtime/service-instance.mjs';
 export const PACKAGE = 'kuaimai-agent-connector';
 // npx's cache is not a durable service location. Install a versioned private
@@ -13,7 +14,8 @@ export async function ensureNpmRuntime({ root = dataRoot(), spec = `${PACKAGE}@$
   const installs = await privateDirectory(join(root, 'npm')), target = join(installs, VERSION), packageDir = join(target, 'node_modules', PACKAGE);
   async function installed() {
     try {
-      for (const path of [target, join(target,'node_modules'), packageDir]) { const info = await lstat(path); if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid()) throw Error('已有安装路径无效'); }
+      for (const path of [target, join(target,'node_modules'), packageDir]) { const info = await lstat(path); if (!info.isDirectory() || info.isSymbolicLink() || (process.getuid && info.uid !== process.getuid())) throw Error('已有安装路径无效'); }
+      if (process.platform === 'win32') await windowsPathAccess(join(packageDir, 'headless.mjs'));
       const value = JSON.parse(await readFile(join(packageDir,'package.json'),'utf8'));
       if (value.name !== PACKAGE || value.version !== VERSION) throw Error('已有安装版本无效');
       return true;
@@ -27,7 +29,9 @@ export async function ensureNpmRuntime({ root = dataRoot(), spec = `${PACKAGE}@$
   try {
     if (await installed()) return packageDir;
     staging = await mkdtemp(join(installs, '.install-'));
-    await run('npm', ['install','--prefix',staging,'--registry=https://registry.npmjs.org','--ignore-scripts','--no-audit','--no-fund','--package-lock=false','--save-exact',spec], { timeout:180000, maxBuffer:2*1024*1024, shell:false });
+    const windows = process.platform === 'win32';
+    const npmArgs = windows ? [join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')] : [];
+    await run(windows ? process.execPath : 'npm', [...npmArgs, 'install','--prefix',staging,'--registry=https://registry.npmjs.org','--ignore-scripts','--no-audit','--no-fund','--package-lock=false','--save-exact',spec], { timeout:180000, maxBuffer:2*1024*1024, shell:false });
     const value = JSON.parse(await readFile(join(staging,'node_modules',PACKAGE,'package.json'),'utf8'));
     if (value.name !== PACKAGE || value.version !== VERSION) throw Error('安装结果与要求的版本不匹配');
     await rename(staging,target); staging=null;

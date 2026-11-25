@@ -2,10 +2,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { openWebUrl } from './windows.mjs';
+
 const hosts = new Set(['copilot.tencent.com', 'www.workbuddy.cn', 'workbuddy.cn', 'open.workbuddy.cn',
   'www.workbuddy.ai', 'workbuddy.ai', 'open.weixin.qq.com', 'codebuddy.ai', 'www.codebuddy.ai']);
 const accountError = message => Object.assign(new Error(message), { publicMessage: message });
-const openBrowser = url => promisify(execFile)('/usr/bin/open', [url], { timeout: 10000 });
+const openBrowser = url => process.platform === 'win32' ? openWebUrl(url) : promisify(execFile)('/usr/bin/open', [url], { timeout: 10000 });
 
 // Use the account API of the bridge-owned CLI process. The CLI selects the
 // login method for its product and confirms the signed-in account itself.

@@ -66,6 +66,22 @@ test('cancel and retry in the same tick never reuse an aborted pending promise o
   finally { f.client.close(); }
 });
 
+test('explicit cancellation discards only the pending request and preserves an earlier grant', async () => {
+  const f = fixture();
+  f.authorize();
+  await f.client.prepare({ provider: 'qwen' }).connection;
+  const grant = f.sessionStorage.getItem('km-agent.code.direct-grant');
+  const next = f.client.prepare({ provider: 'workbuddy' });
+  assert.equal(f.client.savedProvider(), 'workbuddy');
+  f.client.close({ discardPending: true });
+  await assert.rejects(next.connection);
+  assert.equal(f.client.hasPendingRequest(), false);
+  assert.equal(f.client.hasSaved(), true);
+  assert.equal(f.client.savedProvider(), 'qwen');
+  assert.equal(f.sessionStorage.getItem('km-agent.code.direct-grant'), grant);
+  assert.ok(!f.calls.includes('/v1/connect/direct-revoke'));
+});
+
 test('a retired provider cannot resume a grant or pending request as Codex', async () => {
   const f = fixture();
   f.sessionStorage.setItem('km-agent.code.pending', JSON.stringify({

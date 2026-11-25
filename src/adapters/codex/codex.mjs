@@ -115,11 +115,11 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           capture.unsubscribe = rpc.subscribe(event => route(capture, event));
           capture.offClose = rpc.onClose(() => { if (current === capture) invalidate(); });
         }
-        value = { ready: true, version: discovered.version, message: 'Codex 共享本地服务可用；仅连接已有服务' };
+        value = { ready: true, version: discovered.version, message: process.platform === 'win32' ? 'Windows Codex CLI 已就绪' : 'Codex 共享本地服务可用；仅连接已有服务' };
       } catch (error) {
         invalidate(); value = { ready: false, version: null, message: error?.code === 'CODEX_PROTOCOL_INCOMPATIBLE'
           ? 'Codex 的初始化或会话列表协议不兼容，请更新连接器；未重启 Codex'
-          : 'Codex 共享服务不可用或协议验证失败；不会自动启动' };
+          : process.platform === 'win32' ? 'Windows Codex CLI 不可用，请检查原生 CLI 的安装与版本' : 'Codex 共享服务不可用或协议验证失败；不会自动启动' };
       }
       healthCache = { at: now(), value }; return { ...value };
     })().finally(() => { healthFlight = null; });

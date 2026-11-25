@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { open } from 'node:fs/promises';
+import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -8,10 +8,14 @@ import { qwenPagePrompt, qwenUserText, qwenPageScope, qwenContinuationPrompt } f
 import { qwenFileApprovals } from '../protocol/qwen-approvals.mjs';
 import { normalizePageContext } from '../protocol/page-context.mjs';
 
+import { windowsPathAccess } from '../runtime/windows.mjs';
+
 const protocol = 'qwenwork.desktop.v1';
 const sessionPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const requestPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-const defaultControlDir = join(homedir(), 'Library', 'Application Support', 'QwenWorkCN', 'cli-control');
+const defaultControlDir = process.platform === 'win32'
+  ? process.env.KM_AGENT_QWEN_CONTROL_DIR || join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'QwenWorkCN', 'cli-control')
+  : join(homedir(), 'Library', 'Application Support', 'QwenWorkCN', 'cli-control');
 const active = new Set(['starting', 'running', 'waiting_for_input']);
 const terminalEvents = {
   completed: 'session.execution.succeeded',
@@ -25,10 +29,15 @@ const isSessionId = value => typeof value === 'string' && sessionPattern.test(va
 const sessionKey = value => 'ses_qwen_' + createHash('sha256').update(value).digest('hex').slice(0, 32);
 
 async function readPrivateFile(path) {
+  if (process.platform === 'win32') {
+    const info = await lstat(path);
+    if (!info.isFile() || info.nlink !== 1) throw Error('千问办公本机连接文件无效');
+    await windowsPathAccess(path);
+  }
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077) || info.size > 4096) {
+    if (!info.isFile() || process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o077)) || info.size > 4096) {
       throw Error('千问办公本机连接文件权限无效');
     }
     return await file.readFile('utf8');

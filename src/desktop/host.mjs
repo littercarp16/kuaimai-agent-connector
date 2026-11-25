@@ -21,7 +21,7 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
   workBuddyServe, workBuddyServeManager, sessionOptions,
   adapterFactory = options => createProductAdapters(options, { codex: createCodexAdapter }),
   qwenDesktopFactory = () => createQwenDesktopManager(),
-  desktopFactory = () => createCodexDesktopManager({ dock: createCodexDockManager() }),
+  desktopFactory = () => createCodexDesktopManager({ dock: process.platform === 'darwin' ? createCodexDockManager() : null }),
   codexEnabled = process.env.KM_AGENT_DISABLE_CODEX !== '1',
   qwenEnabled = process.env.KM_AGENT_DISABLE_QWEN !== '1',
 } = {}) {
@@ -63,18 +63,19 @@ export function createDesktopHost({ directory, preferredPort = 17653, onChange =
     try {
       if (!logger) log = createFileLogger({ path: join(directory, 'service.log') });
       log.info('service.starting', { preferredPort, maxBytes: log.maxBytes, backups: log.backups });
-      qwenDesktop = qwenEnabled && process.platform === 'darwin' ? qwenDesktopFactory() : null;
+      qwenDesktop = qwenEnabled && ['darwin', 'win32'].includes(process.platform) ? qwenDesktopFactory() : null;
       const codexWorkspace = join(directory, 'codex-workspace');
       if (codexEnabled) await mkdir(codexWorkspace, { recursive: true, mode: 0o700 });
       const adapter = adapterFactory({ adapter: 'generic', codexSessionScope: 'agent', codexWorkspace, codexEnabled, qwenEnabled,
         workBuddyServe: sessionOptions ? createWorkBuddySessionList(sessionOptions) : workBuddyServeManager?.adapter || workBuddyServe });
-      const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-      const publisherCommand = [process.execPath, fileURLToPath(new URL('../../publish.mjs', import.meta.url)), '--runtime', runtimePath].map(quote).join(' ');
+      const windows = process.platform === 'win32';
+      const quote = windows ? value => "'" + value.replaceAll("'", "''") + "'" : value => "'" + value.replaceAll("'", "'\\''") + "'";
+      const publisherCommand = (windows ? "& " : "") + [process.execPath, fileURLToPath(new URL('../../publish.mjs', import.meta.url)), '--runtime', runtimePath].map(quote).join(' ');
       connector = createConnector({ adapter, allowedOrigins: origins, pairCode, publisherKey: key, logger: log,
         publisherCommand, projectIndependentSessions: true, qwenDesktop, workBuddyServeManager,
         onPairCode: code => { pairCode = code; publish(); },
         onBindings: value => { bindings = value; if (connector && endpoint) void persist(key, connector.instanceId); },
-        codexDesktop: codexEnabled && process.platform === 'darwin' ? desktopFactory() : null,
+        codexDesktop: codexEnabled && ['darwin', 'win32'].includes(process.platform) ? desktopFactory() : null,
         enableWorkBuddy: true, enableMultiAgentFollow: true,
         workBuddyOptions: { workspaceId: 'ws_' + createHash('sha256').update(directory).digest('hex') },
         desktopConnect: { ...createConnectionWindow(grants), direct: directGrants },

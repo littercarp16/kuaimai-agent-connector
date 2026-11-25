@@ -8,11 +8,25 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createWorkBuddyAccountLogin } from './workbuddy-account.mjs';
 import { createWorkBuddySessionList } from '../adapters/workbuddy/session-list.mjs';
-import { readConfigFile, safeLocalPath } from '../../skills/km-agent-bridge/scripts/prepare.mjs';
+import { readPrivateConfig } from './private-config.mjs';
+import { windowsPathAccess } from './windows.mjs';
+import { safeLocalPath } from '../../skills/km-agent-bridge/scripts/prepare.mjs';
 import { listenAvailable } from './service-instance.mjs';
 
 const cliRelative = 'Contents/Resources/app.asar.unpacked/cli/bin/codebuddy';
 async function findCli() {
+  if (process.platform === 'win32') {
+    const parents = [process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs'), process.env.ProgramFiles].filter(Boolean);
+    const roots = [process.env.KM_AGENT_WORKBUDDY_DIR, ...parents.flatMap(parent => ['WorkBuddy', 'WorkBuddy AI'].map(name => join(parent, name)))];
+    for (const root of roots.filter(Boolean)) {
+      const cli = join(root, 'resources', 'app.asar.unpacked', 'cli', 'bin', 'codebuddy');
+      if ((await stat(cli).catch(() => null))?.isFile()) {
+        await windowsPathAccess(cli, { privateData: false, program: true });
+        return cli;
+      }
+    }
+    throw Error('未找到 WorkBuddy 内置 CLI，请将 KM_AGENT_WORKBUDDY_DIR 指向包含 resources 的安装目录');
+  }
   for (const directory of ['/Applications', join(homedir(), 'Applications')]) {
     for (const name of ['WorkBuddy AI.app', 'WorkBuddy.app']) {
       const cli = join(directory, name, cliRelative);
@@ -54,7 +68,8 @@ async function startOwnedService(directory, signal, setPhase, assertAllowed) {
     for (const path of [root, config, workspace]) {
       await mkdir(path, { mode: 0o700, recursive: true });
       const info = await lstat(path);
-      if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077)) throw Error('WorkBuddy CLI 数据目录权限无效');
+      if (process.platform === 'win32') await windowsPathAccess(path);
+      if (!info.isDirectory() || process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o077))) throw Error('WorkBuddy CLI 数据目录权限无效');
     }
     const settings = join(config, 'settings.json');
     temp = await mkdtemp(join(root, 'run-'));
@@ -67,7 +82,7 @@ async function startOwnedService(directory, signal, setPhase, assertAllowed) {
       await link(initialSettings, settings);
     } catch (error) { if (error.code !== 'EEXIST') throw error; }
     finally { await rm(initialSettings); }
-    const { gateway } = await readConfigFile(settings, { runtime: true });
+    const { gateway } = await readPrivateConfig(settings);
     const password = gateway?.password;
     if (typeof password !== 'string' || !/^[!-~]{16,256}$/.test(password)) throw Error('WorkBuddy CLI 本机服务密码配置无效');
     const reservation = createServer();
@@ -79,8 +94,11 @@ async function startOwnedService(directory, signal, setPhase, assertAllowed) {
     child = spawn(process.execPath, [cli, '--serve', '--host', '127.0.0.1', '--port', String(port),
       '--auth', 'password', '--agent', 'cli', '--permission-mode', 'default',
       '--setting-sources', 'user'], {
-      cwd: workspace, stdio: 'ignore',
-      env: { PATH: process.env.PATH, TMPDIR: temp, CODEBUDDY_CONFIG_DIR: config,
+      cwd: workspace, stdio: 'ignore', windowsHide: true,
+      env: { ...(process.platform === 'win32' && {
+        SystemRoot: process.env.SystemRoot, USERPROFILE: homedir(), APPDATA: process.env.APPDATA,
+        LOCALAPPDATA: process.env.LOCALAPPDATA, ComSpec: process.env.ComSpec, TEMP: temp, TMP: temp,
+      }), PATH: process.env.PATH, TMPDIR: temp, CODEBUDDY_CONFIG_DIR: config,
         // This independently launched CLI cannot use the desktop's encrypted credential store.
         // Keep its own official login only for the lifetime of this process.
         CODEBUDDY_CREDENTIALS_IN_MEMORY: '1', CODEBUDDY_DISABLE_COMPILE_CACHE: '1', CODEBUDDY_FORCE_LITE_WB_BUNDLE: '1' },

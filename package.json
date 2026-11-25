@@ -1,6 +1,6 @@
 {
   "name": "kuaimai-agent-connector",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Local Agent bridge for Kuaimai and Lingtong with Codex, Qwen and WorkBuddy CLI sessions",
   "license": "UNLICENSED",
   "repository": {
@@ -27,7 +27,8 @@
     "registry": "https://registry.npmjs.org/"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "win32"
   ],
   "type": "module",
   "scripts": {

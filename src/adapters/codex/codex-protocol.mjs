@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import { lstat, realpath, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { windowsPathAccess } from '../../runtime/windows.mjs';
 
 const exec = promisify(execFile), cache = new Map();
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -35,7 +36,8 @@ async function binaryIdentity(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file) || file.includes('\0')) throw Error('invalid binary');
   const actual = await realpath(file), uid = process.getuid?.();
   let current = actual;
-  while (true) {
+  if (process.platform === 'win32') await windowsPathAccess(file, { privateData: false, program: true });
+  else while (true) {
     const info = await lstat(current);
     const temporaryRoot = ['/tmp', '/private/tmp'].includes(current) && info.uid === 0 && (info.mode & 0o1000);
     if (![0, uid].includes(info.uid) || info.isSymbolicLink() ||

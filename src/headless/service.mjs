@@ -1,4 +1,6 @@
 import net from 'node:net';
+import { openWebUrl, windowsPathAccess } from '../runtime/windows.mjs';
+import { windowsControlClient, listenWindowsControl } from './windows-control.mjs';
 import { mkdir, lstat, chmod, unlink, realpath } from 'node:fs/promises';
 import { isAbsolute, join, resolve, parse } from 'node:path';
 import { homedir } from 'node:os';
@@ -27,6 +29,7 @@ const sharedDirectory = () => {
   if (!isAbsolute(directory)) throw Error('KM_AGENT_CODE_INSTANCE_DIR 需要独立实例的绝对目录');
   return directory;
 };
+const windows = process.platform === 'win32';
 const CONTROL_PROTOCOL = 1;
 const missingService = error => ['ENOENT', 'ECONNREFUSED'].includes(error.code);
 const requireOrigin = origin => {
@@ -34,6 +37,11 @@ const requireOrigin = origin => {
 };
 const legacyDirectory = origin => join(dataRoot(), 'instances', createHash('sha256').update(origin).digest('hex').slice(0, 16));
 export async function privateDirectory(directory) {
+  if (windows) {
+    const absolute = resolve(directory);
+    await windowsPathAccess(absolute, { create: true });
+    return absolute;
+  }
   const absolute = resolve(directory).replace(/^\/var\//, '/private/var/').replace(/^\/tmp\//, '/private/tmp/'); let current = parse(absolute).root;
   for (const part of absolute.slice(current.length).split('/').filter(Boolean)) {
     current = join(current, part);
@@ -53,12 +61,17 @@ export function decodeRequest(encoded, now = Date.now()) {
   return { ...value, ...parseConnectURL(value.url, [origin]) };
 }
 export async function control(directory, request) {
-  const socketPath = join(directory, 'control.sock'), info = await lstat(socketPath);
-  if (!info.isSocket() || info.uid !== process.getuid() || (info.mode & 0o077)) throw Error('本机控制通道权限无效');
+  const socketPath = join(directory, 'control.sock');
+  if (!windows) {
+    const info = await lstat(socketPath);
+    if (!info.isSocket() || info.uid !== process.getuid() || (info.mode & 0o077)) throw Error('本机控制通道权限无效');
+  }
+  const socket = windows ? await windowsControlClient(directory) : net.createConnection(socketPath);
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection(socketPath); let bytes = '';
-    socket.setTimeout(15000, () => socket.destroy(Error('本机服务响应超时')));
-    socket.on('connect', () => socket.end(JSON.stringify(request) + '\n'));
+    let bytes = '';
+    socket.setTimeout(windows ? 60000 : 15000, () => socket.destroy(Error('本机服务响应超时')));
+    if (windows) socket.once('secureConnect', () => socket.write(JSON.stringify(request) + '\n'));
+    else socket.once('connect', () => socket.end(JSON.stringify(request) + '\n'));
     socket.on('data', data => { bytes += data; if (bytes.length > 20000) socket.destroy(Error('响应过长')); });
     socket.on('error', reject);
     socket.on('end', () => { try { const value = JSON.parse(bytes); if (!value.ok) throw Object.assign(Error(value.error), { code: value.code }); resolve(value.data); } catch (error) { reject(error); } });
@@ -80,7 +93,7 @@ export async function runService({ origin, directory = sharedDirectory(), port =
   process.title = 'kuaimai-agent-connector';
   directory = await privateDirectory(directory);
   const logger = createFileLogger({ path: join(directory, 'service.log') });
-  const socketPath = join(directory, 'control.sock');
+  const socketPath = join(directory, windows ? 'control.json' : 'control.sock');
   const sessionOptions = workBuddySessionOptions();
   delete process.env.KM_AGENT_WORKBUDDY_PASSWORD;
   const workBuddyServeManager = sessionOptions ? null : createWorkBuddyServeManager({ directory });
@@ -105,9 +118,10 @@ export async function runService({ origin, directory = sharedDirectory(), port =
   async function stop() {
     if (closing) return; closing = true; shutdownRequested = true;
     try {
+      server?.close();
+      if (ownsControlSocket) await unlink(socketPath).catch(() => {});
       await host.stop();
     } finally {
-      server?.close(); if (ownsControlSocket) await unlink(socketPath).catch(() => {});
       for (const [signal, handler] of signals) process.removeListener(signal, handler);
       process.removeListener('uncaughtExceptionMonitor', fatal); logger.close();
     }
@@ -119,16 +133,24 @@ export async function runService({ origin, directory = sharedDirectory(), port =
     return browserSetup ||= import('../extension/install.mjs').then(module => module.installExtensionHost()).finally(() => { browserSetup = null; });
   }
   try {
-    if (Buffer.byteLength(socketPath) > 100) throw Error('后台运行目录路径过长');
+    if (!windows && Buffer.byteLength(socketPath) > 100) throw Error('后台运行目录路径过长');
     await host.start({ origins: [origin] });
     // The host lease was acquired first, so only its owner may replace a stale socket.
-    try { const old = await lstat(socketPath); if (!old.isSocket() || old.uid !== process.getuid()) throw Error('已有控制路径无法替换'); await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    server = net.createServer({ allowHalfOpen: true }, socket => {
+    if (!windows) try { const old = await lstat(socketPath); if (!old.isSocket() || old.uid !== process.getuid()) throw Error('已有控制路径无法替换'); await unlink(socketPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const onControl = socket => {
       let bytes = '';
-      socket.setTimeout(10000, () => { logger.warn('control.timeout'); socket.destroy(); });
+      socket.setTimeout(windows ? 60000 : 10000, () => { logger.warn('control.timeout'); socket.destroy(); });
       socket.on('error', error => logger.warn('control.socket_error', { error }));
-      socket.on('data', data => { bytes += data; if (bytes.length > 16000) { logger.warn('control.rejected', { reason: 'request_too_large' }); socket.destroy(); } });
-      socket.on('end', async () => {
+      let handled = false;
+      socket.on('data', data => {
+        bytes += data;
+        if (bytes.length > 16000) { socket.destroy(); return; }
+        if (windows && bytes.endsWith('\n')) void handle();
+      });
+      socket.once('end', handle);
+      async function handle() {
+        if (handled || socket.destroyed) return;
+        handled = true;
         const started = performance.now(); let action = 'unknown';
         try {
           const request = JSON.parse(bytes); let data, stopService = false;
@@ -175,11 +197,16 @@ export async function runService({ origin, directory = sharedDirectory(), port =
           logger.warn('control.request', { action, durationMs: Math.round((performance.now() - started) * 100) / 100, outcome: 'rejected', error });
           socket.end(JSON.stringify({ ok: false, error: String(error.message).slice(0, 240), ...(error.code === 'ESHUTDOWN' ? { code: error.code } : {}) }));
         }
-      });
-    });
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+      }
+    };
+    if (windows) server = await listenWindowsControl(directory, onControl);
+    else {
+      server = net.createServer({ allowHalfOpen: true }, onControl);
+      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
+      ownsControlSocket = true;
+      await chmod(socketPath, 0o600);
+    }
     ownsControlSocket = true;
-    await chmod(socketPath, 0o600);
     for (const [signal, handler] of signals) process.once(signal, handler);
     return { status: publicStatus, stop };
   } catch (error) { logger.error('service.start_failed', { error }); await stop(); throw error; }
@@ -226,14 +253,14 @@ export async function ensureService({ origin, directory = sharedDirectory(), por
     launchLog.info('service.launching', { origin, preferredPort: port }); launchLog.close();
     // The child writes structured logs itself. Raw stderr can contain prompts
     // or credentials and must not bypass rotation or the log field allowlist.
-    const child = spawn(process.execPath, [entry, 'serve', '--origin', origin, '--directory', directory, '--port', String(port)], { detached: true, stdio: 'ignore', cwd: await realpath(fileURLToPath(new URL('../../', import.meta.url))) });
+    const child = spawn(process.execPath, [entry, 'serve', '--origin', origin, '--directory', directory, '--port', String(port)], { detached: true, windowsHide: true, stdio: 'ignore', cwd: await realpath(fileURLToPath(new URL('../../', import.meta.url))) });
     const failed = error => {
       const log = createFileLogger({ path: join(directory, 'service.log') });
       log.error('service.launch_failed', { error, exitCode: child.exitCode, signal: child.signalCode }); log.close();
     };
     try { await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref(); }
     catch (error) { failed(error); throw error; }
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < (windows ? 450 : 100); i++) {
       await delay(100); const ready = await check(); if (ready) return { ...ready, reused: false };
       if (child.exitCode !== null || child.signalCode !== null) { failed(); throw Error('后台启动失败，请检查服务日志'); }
     }
@@ -258,6 +285,7 @@ export async function startService({ origin, directory = sharedDirectory(), port
   return { ...await control(directory, { action: 'start', origin }), reused: status.reused };
 }
 export async function openCallback(result) {
+  if (windows) return openWebUrl(result.callbackURL);
   const browsers = { chrome: 'com.google.Chrome', edge: 'com.microsoft.edgemac', firefox: 'org.mozilla.firefox', safari: 'com.apple.Safari' };
   await promisify(execFile)('/usr/bin/open', [...(browsers[result.browser] ? ['-b', browsers[result.browser]] : []), result.callbackURL], { timeout: 10000 });
 }

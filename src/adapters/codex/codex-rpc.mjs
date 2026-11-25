@@ -5,6 +5,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import path from 'node:path';
 import WebSocket from 'ws';
+import { discoverWindowsCodex, windowsCodexIdentity, stdioTransport } from './windows-stdio.mjs';
 
 const execVersion = promisify(execFile);
 const VERSION_BYTES = 64 * 1024;
@@ -76,6 +77,7 @@ async function inspectSocket(socketPath) {
 
 /** Read-only discovery. This never starts/stops a daemon or reads Codex config/auth/DB. */
 export async function discoverCodexDaemon({ run = execVersion, command = 'codex' } = {}) {
+  if (process.platform === 'win32') return discoverWindowsCodex();
   const unready = message => ({ ready: false, version: null, message });
   let status;
   try {
@@ -131,17 +133,19 @@ function invokeSafely(fn, value) {
   try { Promise.resolve(fn(value)).catch(() => {}); } catch { /* Never log native bodies/callback errors. */ }
 }
 
-/** WebSocket HTTP Upgrade over an owned Unix socket; never stdio/JSONL or a new server. */
+/** macOS shared daemon or a bridge-owned Windows CLI, using the same RPC lifecycle. */
 export async function connectCodexRpc({ socketPath, version = null, timeoutMs = 5000, maxBytes = 1024 * 1024 } = {}) {
   version = reportedVersion(version);
   if (!positiveInteger(timeoutMs) || timeoutMs > 2 ** 31 - 1 || !positiveInteger(maxBytes)) {
     throw safeError('CODEX_INVALID_OPTIONS', 'Codex 连接参数无效');
   }
-  const identity = await inspectSocket(socketPath);
+  const windows = process.platform === 'win32';
+  const inspect = windows ? windowsCodexIdentity : inspectSocket;
+  const identity = await inspect(socketPath);
   let ws;
   try {
     // The URL supplies HTTP Host only. All bytes go through net.connect(path), never TCP.
-    ws = new WebSocket('ws://localhost/', {
+    ws = windows ? stdioTransport(identity.socketPath, ['app-server', '--listen', 'stdio://'], maxBytes) : new WebSocket('ws://localhost/', {
       createConnection: () => createConnection({ path: identity.socketPath }),
       handshakeTimeout: timeoutMs, maxPayload: maxBytes, perMessageDeflate: false,
       followRedirects: false,
@@ -340,7 +344,7 @@ export async function connectCodexRpc({ socketPath, version = null, timeoutMs = 
       timer = setTimeout(fail, timeoutMs);
     });
     // Do not carry pending state across a replaced socket, even at the same pathname.
-    if ((await inspectSocket(identity.socketPath)).instanceId !== identity.instanceId) throw invalidSocket();
+    if ((await inspect(identity.socketPath)).instanceId !== identity.instanceId) throw invalidSocket();
     const initialization = await request('initialize', {
       clientInfo: { name: 'kuaimai_codex_bridge', version: '1.0.0' },
       capabilities: { experimentalApi: true, optOutNotificationMethods: [

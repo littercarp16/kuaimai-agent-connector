@@ -213,10 +213,11 @@
       const provider = (validPending(waiting) ? waiting : read(sessionStorage, grantKey))?.provider;
       return ['workbuddy', 'codex', 'qwen'].includes(provider) ? provider : 'codex';
     }
-    function close({ forget = false } = {}) {
+    function close({ forget = false, discardPending = false } = {}) {
       controller?.abort(); pending = null; const current = session; session = null;
+      if (discardPending || forget) sessionStorage.removeItem(pendingKey);
       if (forget) {
-        const grant = read(sessionStorage,grantKey); sessionStorage.removeItem(grantKey); sessionStorage.removeItem(pendingKey); localStorage.removeItem(endpointKey);
+        const grant = read(sessionStorage,grantKey); sessionStorage.removeItem(grantKey); localStorage.removeItem(endpointKey);
         if (validGrant(grant)) void request(grant.endpoint,'/v1/connect/direct-revoke',{reconnectToken:grant.reconnectToken,instanceId:grant.instanceId},undefined,2000).catch(() => {});
       }
       current?.detach();

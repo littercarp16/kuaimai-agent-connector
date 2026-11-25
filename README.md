@@ -1,61 +1,83 @@
 # 快麦 Agent 连接器
 
-本机 Agent 桥接服务，通过 `km-agent/1` 提供会话发现、选择、实时消息和授权后的网页输入。代码版支持 **macOS + Node.js 22 或更新版本**，可连接 ChatGPT / Codex、千问办公和 WorkBuddy CLI。
+在绫通快麦多维表格的自定义页面里，选择本机的 ChatGPT / Codex、千问办公或 WorkBuddy CLI，即可新建或继续一个会话、收发消息，并处理 Agent 支持的审批。三个 Agent 共用当前系统用户的同一个后台连接器。
+
+## 系统要求
+
+从 `kuaimai-agent-connector@0.9.0` 起，macOS 和 Windows 共用同一个 npm 包。两端都需要 **Node.js 22 或更高版本及其随附的 npm**，并在当前系统用户下安装要接入的 Agent。可先运行 `node --version` 确认环境。
+
+| 系统 | 验证情况 |
+| --- | --- |
+| macOS | 已验证 Codex、千问办公和 WorkBuddy CLI 的新建会话、绑定及消息收发。 |
+| Windows 11 | 桥接后台真机自检 5 项全部通过，覆盖启动、进程复用、控制通道和停止。三个 Agent 的网页协作仍待真机验收。 |
+| Windows 10 | 已纳入适配范围，待真机验证。 |
+
+Windows 上的 Codex 需要安装并登录 Windows 原生 CLI。非默认安装目录和本地测试包的操作见 [Windows 验收说明](https://github.com/littercarp16/kuaimai-agent-connector/blob/main/docs/WINDOWS.md)。
 
 ## 网页接入
 
-在绫通快麦多维表格网页选择 Agent，点击“复制连接请求”，交给本地 Agent 执行。
+1. 在绫通自定义页面选择 Agent，点击 **复制连接请求**，把整段文案发给所选的本地 Agent 执行。已有兼容的桥接服务时也用这一步为新标签页授权，命令会复用正在运行的服务。
+2. Agent 返回 `ok: true` 后，回到**生成请求的原标签页**。网页领取授权并打开会话选择框；如果已经显示「本地连接器已连接」，可直接在会话设置中继续。
+3. 在所选 Agent 最近的 10 条会话中选一条，点击「确认并进入协作」，也可以选择**新建会话**，点击「新建并进入」。三个 Agent 都在确认后开启网页输入，无需另勾「允许网页输入」。WorkBuddy 提示登录时，按下表完成 CLI 授权。
+4. 在网页发送第一条消息。Agent 的回复会出现在对话中。遇到支持的原生审批时，在对话中的审批卡上点「允许」或「拒绝」。
+
+使用 npm 版时，三份连接请求都用 `npx` 从 npmjs 获取网页指定版本的 `kuaimai-agent-connector`，执行 `connect --request`。请求里带有目标 Agent、网页来源和本标签页的授权信息，有效期为 **10 小时**。直接复制网页生成的文案即可，无需填写端口、项目目录或配对码。
+
+点击「新建并进入」会建立一个空会话。发送需求时，绫通会附上当前页面的上下文。Agent 保存草稿后可以在原网页预览，再由用户确认发布。
+
+### 各 Agent 的接入差异
+
+| Agent | 首次使用和会话来源 |
+| --- | --- |
+| ChatGPT / Codex | Windows 通过本机原生 Codex CLI 的 app-server 获取会话。macOS 通过共享 app-server socket 获取会话。执行复制请求时可以继续当前的 Codex 任务。桌面端使用私有 stdio 时，见 [Codex 接入说明](https://github.com/littercarp16/kuaimai-agent-connector/blob/main/docs/CODEX.md)。 |
+| 千问办公 | 桥接会检查千问的本机 HTTP 接口。接口已开启时直接复用；已运行的千问未开启接口时，桥接会正常退出千问，再以启用 HTTP 的环境变量重新启动。**这会中断千问当前的任务**，刷新绫通恢复连接时也可能触发检查。 |
+| WorkBuddy CLI | 使用 WorkBuddy 应用内置的 CLI。绫通显示「登录 WorkBuddy CLI」时，点击按钮完成官方登录。如果绑定或新建时已经打开官方登录页，直接在该页授权。回到绫通后，以「WorkBuddy CLI 已登录」为准。列表只展示连接器工作目录对应的 CLI 会话，后续在绫通里选回会话续聊。CLI 进程退出后可能需要再次登录。 |
+
+### 哪些网页需要浏览器扩展
+
+| 绫通网页来源 | 用户操作 |
+| --- | --- |
+| 正式或灰度 HTTPS 网页 | 网页直接连接本机服务，无需安装扩展。若浏览器询问是否允许访问本地网络，请允许。 |
+| `http://local.lt.com:8251`、`http://lt.com:8085` | 这两个 HTTP 开发来源通过「快麦本地 Agent 连接」扩展访问本机服务。若网页提示缺少扩展，在 Chrome 或 Edge 的扩展管理页加载命令返回的 `browserExtension.extensionDirectory`，再刷新原标签页。已加载的扩展可以复用。 |
+
+扩展负责在网页和本机服务之间转发请求和实时消息。命令输出中的 `extensionInstallRequired: true` 表示该网页来源使用扩展通道；是否需要安装，以原网页的提示为准。加载已解压扩展的步骤见[扩展安装说明](https://github.com/littercarp16/kuaimai-agent-connector/blob/main/browser-extension/README.md)。
+
+## 重连与服务管理
+
+- **刷新原标签页**时，网页可凭有效的恢复授权重新连接。恢复授权有效期为 8 小时；恢复连接后，需要重新确认会话才能发送消息。换到新标签页、授权过期或服务重启后，重新复制连接请求。
+- **关闭网页**后，共享后台继续运行。「断开本页连接」撤销当前标签页的恢复授权。需要撤销整个网页来源的授权时，再使用下面的 `stop` 命令。
+- **检查运行状态**时，使用网页连接请求里的包版本和实际来源。来源包含协议、域名和端口，省略页面路径。以下以 `0.9.0` 和正式站为例。Windows PowerShell 可用 `npx.cmd` 执行相同命令。
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" connect --request '<网页自动生成的请求>'
+npx --yes --registry=https://registry.npmjs.org/ kuaimai-agent-connector@0.9.0 status --origin https://app.ltpass.com
 ```
 
-`CONNECTOR_VERSION` 使用网页复制文案中的 npm 版本。命令安装或复用当前用户目录中的对应版本，启动或复用共享后台进程，并将实际端口返回原网页。HTTP 开发页与 HTTPS 正式页可共用进程和端口，每个网页来源各自领取授权。无需选择项目目录、填写端口或配对码。接入请求自生成起 10 小时内有效。
+`status` 返回共享后台的 `pid`、`version`、实际监听地址 `endpoint`、已授权来源 `origins` 和日志位置 `logging.path`。服务优先监听 `127.0.0.1:17653`，端口被占用时会在 17653–17684 内选择可用端口。连接命令返回 `reused: true` 表示已复用现有后台。
 
-WorkBuddy CLI 使用本机 WorkBuddy 安装包提供的 CLI。在网页选择已有 CLI 会话或新建会话，确认绑定后即可收发消息。需要账号授权时，在官方登录页完成登录。CLI 进程退出后可能需要重新登录，已保存的会话仍可选择。
-
-- 不安装 macOS App，不创建登录启动项，不修改原 Agent 的模型和工具审批设置。
-- 首选端口 17653 占用时在 17653–17684 内自动选择可用端口，网页自动发现，不终止占用进程。
-- 展示当前 Agent 最近活动的 10 条主会话及项目名称。
-- 明确选择会话并授权后才能输入 prompt；Codex 安装接入不会重启正在执行准备任务的 Agent。千问 HTTP 未开启时，由独立后台桥接正常退出并重新启动千问，可能中断当前任务；网页连接请求会明确说明。
-- 服务仍运行时可直接重连；退出登录、电脑重启或停止服务后，再次复制请求启动。
-- Codex 需要共享 app-server socket，私有 stdio 的切换见 [Codex 接入](docs/CODEX.md)。
-
-## 0.4.0 页面协作
-
-- 千问办公 2.0.2：首次连接与复用桥接都会检测 HTTP 接口。需要时通过启动环境变量启用接口，不写入 `.env`、不安装 Skill 或 Hook；正常退出失败时不强杀。
-- 网页显式绑定会话后发送原始用户输入和当前页面元数据。Codex 0.169.0 使用 `additionalContext`；千问使用已验证的正文上下文分区，首次发送、切换页面或上下文失效时才补充，同页续聊避免重复。用户原文单独保留。
-- 千问运行时文件访问审批同步网页，支持允许和拒绝；提交前校验实例、会话、任务和完整访问范围，未知权限仍在原客户端处理。千问可能在当前会话记住路径和访问方式，不修改全局审批设置。
-- 支持 Agent 读取原页面、保存草稿和网页自动预览；发布页面仍由用户确认操作。网页需同步本版本 SDK 与页面协作组件。
-- 改善 Codex 较长会话的历史读取边界，并增加带轮转的脱敏运行日志。
-
-## 服务管理
+要撤销上述来源，在同一终端执行以下命令。其他已授权来源可继续使用；移除最后一个来源时，共享后台退出。
 
 ```sh
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" status --origin https://app.ltpass.com
-npx --yes --registry=https://registry.npmjs.org kuaimai-agent-connector@"$CONNECTOR_VERSION" stop --origin https://app.ltpass.com
+npx --yes --registry=https://registry.npmjs.org/ kuaimai-agent-connector@0.9.0 stop --origin https://app.ltpass.com
 ```
 
-以实际网页来源替换示例。代码按版本保存在 `~/.kuaimai-agent/code/npm/`，共享后台的运行信息与日志位于 `~/.kuaimai-agent/code/instances/shared/`。运行文件包含本机凭据，不应上传或公开。
-
-可在 macOS「活动监视器」中搜索 `kuaimai-agent-connector`。共享后台的 `status` 返回同一个 PID、实际运行版本及已登记的 `origins`。`stop --origin` 撤销指定来源的授权，移除最后一个来源时停止进程。旧版的按来源进程可用其对应版本的命令管理。
-
-0.4.0 增加[运行日志与自动轮转](docs/LOGGING.md)：记录服务启动/停止、网页授权、实时连接断开、请求状态码与耗时，以及脱敏后的错误诊断。后台 `status` 的 `logging` 字段给出日志路径、轮转限制和写入失败次数。
+macOS 的数据目录为 `~/.kuaimai-agent/code/`，Windows 为 `%USERPROFILE%\.kuaimai-agent\code\`。其中 `npm/` 存放各版本的运行包，`instances/shared/service.log` 记录共享后台日志。Windows 任务管理器的「详细信息」中，可用 `status` 返回的 PID 定位对应的 `node.exe`。[运行日志说明](https://github.com/littercarp16/kuaimai-agent-connector/blob/main/docs/LOGGING.md)
 
 ## 开发
 
+在本项目根目录运行以下命令安装依赖、测试并检查 npm 包内容。
+
 ```sh
-npm ci --ignore-scripts --registry=https://registry.npmjs.org
+npm ci --ignore-scripts --registry=https://registry.npmjs.org/
 npm test
 npm pack --dry-run
 ```
 
-`src/adapters/` 实现 Agent 适配，`src/http/` 实现 HTTP/SSE，`src/headless/` 实现后台运行，`web/` 提供原页面直连 SDK（旧 macOS 应用的连接窗口保留兼容），`tests/` 是回归测试。原有 CLI、技能和 macOS 应用分发方式保留。
+本地联调可从仓库根目录执行 `node ./headless.mjs connect --request '<网页生成的请求>'`。如果本机已有兼容的 npm 后台，这条命令也会复用它。要单独验证当前源码，可将 `KM_AGENT_CODE_INSTANCE_DIR` 设为当前用户新建的临时绝对目录，再执行连接请求。
 
-线上/灰度 HTTPS 网页直接连接本机，并按浏览器提示允许本地网络访问；如设置 CSP，`connect-src` 需允许 `http://127.0.0.1:*`。
+`src/adapters/` 实现 Agent 适配，`src/http/` 提供 HTTP/SSE 接口，`src/headless/` 管理后台进程，`web/` 提供网页 SDK。前端发布前，在本仓库运行以下命令，将包版本、SDK 和回调页同步到绫通工作区；前端连接请求使用同步后的 `code-release.json` 指定的版本。
 
-`http://lt.com:8085` 和 `http://local.lt.com:8251` 使用浏览器扩展通道，无需改 HTTPS，不打开连接窗口。Agent 执行 0.3.2+ 的连接请求时自动注册本机通道；首次需在 Chrome 中安装扩展并刷新原网页，之后直接复用。端口发现、最近会话和双向流式消息仍由本机连接器提供，不经过服务器中继。见 [扩展安装说明](browser-extension/README.md) 和 [通信说明](docs/BROWSER-EXTENSION.md)。
+```sh
+node desktop/sync-code.mjs /absolute/path/to/lingtong-app-view
+```
 
-前端发布前执行 `node desktop/sync-code.mjs /absolute/path/to/lingtong-app-view` 同步 npm 版本、SDK 和回调页；不需将运行包复制进网页静态目录。
-
-[代码版说明](docs/CODE-RUNTIME.md) · [协议](docs/PROTOCOL.md) · [macOS 应用](docs/MACOS-APP.md) · [技能](skills/README.md)
+部署 HTTPS 页面时，若配置了 CSP，`connect-src` 需允许 `http://127.0.0.1:*`。来源授权、端口发现与恢复协议见[运行机制](https://github.com/littercarp16/kuaimai-agent-connector/blob/main/docs/CODE-RUNTIME.md)。

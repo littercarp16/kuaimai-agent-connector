@@ -148,13 +148,18 @@ async function withLock(path, waitMs, action, { retainUncertain = false } = {}) 
   const token = randomUUID(), deadline = Date.now() + waitMs;
   let handle, identity, release = true;
   while (!handle) {
-    await safeLocalPath(path, { allowMissing: true });
+    // Only the parent is stable. The owner can release the lock at any time.
+    await safeLocalPath(dirname(path));
     try { handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW || 0), 0o600); }
     catch (error) {
       if (error.code !== 'EEXIST') fail('LOCK_UNSAFE');
-      const info = await lstat(path);
-      if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600 || !owned(info) || info.nlink !== 1) fail('LOCK_UNSAFE');
+      const info = await lstat(path).catch(cause => {
+        if (cause.code === 'ENOENT') return null;
+        throw cause;
+      });
+      if (info && (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600 || !owned(info) || info.nlink !== 1)) fail('LOCK_UNSAFE');
       if (Date.now() >= deadline) fail('LOCK_TIMEOUT');
+      if (!info) continue;
       await delay(Math.min(40, Math.max(1, deadline - Date.now())));
     }
   }

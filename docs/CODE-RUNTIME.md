@@ -1,13 +1,13 @@
 # npm 后台运行版
 
-当前支持 macOS 与 Node.js 22+。网页复制请求，让本地 Agent 从 npm 官方源安装并后台启动。不需要 `.app`、登录启动项、项目目录、手动端口或配对码。
+从 0.9.0 起，npm 后台支持 macOS 和 Windows，需要 Node.js 22+。网页复制请求，让本地 Agent 从 npm 官方源安装并后台启动。不需要 `.app`、登录启动项、项目目录、手动端口或配对码。
 
 ## 原页面连接流程
 
 1. 网页生成 state 和 PKCE verifier。复制请求包含 state、challenge 与精确网站来源，自生成起 10 小时内有效。verifier 留在当前标签页。
 2. Agent 执行网页生成的 `npx` 命令，使用其中指定的 npm 版本与连接请求。
 3. CLI 将对应版本安装到 `~/.kuaimai-agent/code/npm/<版本>/`，忽略安装脚本。服务从持久目录独立运行。
-4. 同一用户的各个来源共用 `~/.kuaimai-agent/code/instances/shared/` 中的后台。CLI 复用控制协议兼容的同版或更高版本。执行更新版本的 CLI 时，通过私有控制 socket 升级旧的共享后台，完成后各网页重新领取授权。
+4. 同一用户的各个来源共用 `~/.kuaimai-agent/code/instances/shared/` 中的后台。CLI 复用控制协议兼容的同版或更高版本。执行更新版本的 CLI 时，根据 Agent 能力及版本检查决定是否复用旧后台，升级通过当前用户的私有控制通道执行，完成后各网页重新领取授权。
 5. 服务优先监听 17653，被占用则在 17653–17684 中选择可用端口；全部占用时明确报错。网页只向该范围和曾经保存的 loopback 端点请求无凭据的发现接口，不扫描任意端口。
 6. Agent 通过私有 IPC 登记短期 challenge。不会运行 `open`、打开 URL Scheme 或浏览器回调。原页面发现服务后用 verifier 单次领取当前实例的授权。
 7. HTTPS 网页直接通过 HTTP/SSE 加载最近 10 条会话、项目名和双向消息；两个指定 HTTP 环境通过浏览器扩展和本机消息通道传输，不使用 popup、iframe 或中转窗口。

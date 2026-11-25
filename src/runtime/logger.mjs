@@ -28,7 +28,7 @@ function fieldsForLog(fields) {
   return result;
 }
 function checkFile(info) {
-  if (!info.isFile() || info.uid !== process.getuid() || info.nlink !== 1) throw Object.assign(Error('Unsafe log file'), { code: 'EPERM' });
+  if (!info.isFile() || (process.getuid && info.uid !== process.getuid()) || info.nlink !== 1) throw Object.assign(Error('Unsafe log file'), { code: 'EPERM' });
 }
 function checkPath(path) {
   try { checkFile(lstatSync(path)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -37,10 +37,10 @@ export function createFileLogger({ path, maxBytes = LOG_MAX_BYTES, backups = LOG
   if (!Number.isInteger(maxBytes) || maxBytes < 1024 || !Number.isInteger(backups) || backups < 1 || backups > 20) throw Error('Invalid log rotation limits');
   path = resolve(path);
   const directory = lstatSync(dirname(path));
-  if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid() || (directory.mode & 0o022)) throw Error('Unsafe log directory');
+  if (!directory.isDirectory() || directory.isSymbolicLink() || (process.platform !== 'win32' && (directory.uid !== process.getuid() || (directory.mode & 0o022)))) throw Error('Unsafe log directory');
   checkPath(path);
   const fd = openSync(path, constants.O_CREAT | constants.O_APPEND | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
-  try { checkFile(fstatSync(fd)); fchmodSync(fd, 0o600); } catch (error) { closeSync(fd); throw error; }
+  try { checkFile(fstatSync(fd)); if (process.platform !== 'win32') fchmodSync(fd, 0o600); } catch (error) { closeSync(fd); throw error; }
   let closed = false, warned = false, writeFailures = 0, lastError;
   function rotate() {
     for (let i = 1; i <= backups; i++) checkPath(path + '.' + i);
