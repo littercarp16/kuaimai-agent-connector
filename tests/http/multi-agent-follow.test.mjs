@@ -82,6 +82,35 @@ for (const provider of ['codex', 'qwen']) test(provider + ' creates once for con
   assert.deepEqual(creations, [provider]); assert.deepEqual(sends, []);
 });
 
+test('新建独立会话不受原绑定会话仍在运行或待核验状态阻塞', async t => {
+  let seq = 0;
+  const codex = {
+    descriptor: { id: 'codex', status: 'native' },
+    capabilities: { send: true, newSession: true, submitPrompt: true },
+    health: async () => ({ ready: true }),
+    listSessions: async () => [{ id: 'ses_codex_' + '1'.repeat(32), title: 'running-old' }],
+    createSharedSession: async () => ({ id: 'ses_codex_' + String(++seq + 1).repeat(32).slice(0, 32), title: 'new-session' }),
+    bindSession: async id => ({ id, title: id, provider: 'codex' }),
+    readShared: async id => ({ status: id.endsWith('1') ? 'running' : 'idle', messages: [] }),
+    watch: () => ({ ready: Promise.resolve(), close() {} }),
+    sendShared: async () => ({ id: 'msg' }),
+  };
+  const adapter = createNativeRegistry({ primary: codex });
+  const f = await fixture(t, { adapter, autoTrust: { origin }, projectIndependentSessions: true });
+  const oldId = 'ses_codex_' + '1'.repeat(32);
+  assert.equal((await f.web('/v1/bind', { sessionId: oldId, allowControl: true }, f.token)).status, 200);
+  assert.equal((await f.read()).run.status, 'running');
+  const created = await f.web('/v1/session/new', {
+    provider: 'codex',
+    instanceId: (await f.read()).instanceId,
+    requestId: randomUUID(),
+    allowControl: true,
+  }, f.token);
+  assert.equal(created.status, 200);
+  assert.notEqual(created.data.createdSessionId, oldId);
+  assert.equal(created.data.binding.id, created.data.createdSessionId);
+});
+
 test('WorkBuddy distinguishes joining login, recovering a specific attempt and legacy clients', async t => {
   const options = [], attemptId = randomUUID();
   const manager = {

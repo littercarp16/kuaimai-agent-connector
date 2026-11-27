@@ -3,6 +3,7 @@ import { redactText } from '../../tools/display-safety.mjs';
 import { publicToolInfo, publicToolResult } from '../../tools/tool-public.mjs';
 import { createDetailStore, detailPolicy, makeToolDetail } from '../../tools/tool-details.mjs';
 import{nativeExternalTool,nativeTextPreview}from'./codex-native-tool-details.mjs';
+import { parseAttachmentBlock, displayLocalImage, displayImageUrl } from './codex-files.mjs';
 
 export const publicText = value => redactText(String(value ?? ''), false, { complete: true });
 export const nativeKey = value => typeof value === 'string' && /^[\w:.-]{1,120}$/.test(value);
@@ -46,11 +47,50 @@ export function nativeTool(item, directory) {
   return nativeExternalTool(item,directory);
 }
 
+const MAX_GEN_IMAGES = 8;
+const MAX_GEN_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_GEN_IMAGES_TOTAL = 24 * 1024 * 1024;
+
+function detectImageBase64(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  const cleaned = raw.startsWith('data:') ? raw.slice(raw.indexOf(',') + 1) : raw;
+  if (!cleaned || cleaned.length > Math.ceil(MAX_GEN_IMAGE_BYTES / 3) * 4 + 4) return null;
+  const bytes = Buffer.from(cleaned, 'base64');
+  if (!bytes.length || bytes.length > MAX_GEN_IMAGE_BYTES) return null;
+  let mime = '';
+  if (bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) mime = 'image/png';
+  else if (bytes.length > 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) mime = 'image/jpeg';
+  else if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') mime = 'image/webp';
+  else if (bytes.length >= 10 && /^GIF8[79]a$/.test(bytes.toString('ascii', 0, 6))) mime = 'image/gif';
+  if (!mime) return null;
+  return { mime, base64: bytes.toString('base64'), bytes: bytes.length };
+}
+
 /** Bounded public projection plus private, bounded text accumulators, per binding. */
 export function createCodexState({ sessionId, directory, makeEvent, publish, now = Date.now }) {
   const projection = createProjection(sessionId), items = new Map(), terminalTurns = new Map();
   const details = createDetailStore({ now });
-  let activeTurnId = null, latestTurnId = null, status = 'idle', model = null, revision = 0, turnRevision = 0, itemBytes = 0;
+  const generatedImages = new Map();
+  let activeTurnId = null, latestTurnId = null, status = 'idle', model = null, revision = 0, turnRevision = 0, itemBytes = 0, generatedImageBytes = 0;
+  function putGeneratedImage(id, raw) {
+    if (!nativeKey(id)) return false;
+    const parsed = detectImageBase64(raw);
+    if (!parsed) return false;
+    const prev = generatedImages.get(id);
+    if (prev) { generatedImageBytes -= prev.bytes; generatedImages.delete(id); }
+    generatedImages.set(id, parsed);
+    generatedImageBytes += parsed.bytes;
+    while (generatedImages.size > MAX_GEN_IMAGES || generatedImageBytes > MAX_GEN_IMAGES_TOTAL) {
+      const first = generatedImages.keys().next().value;
+      generatedImageBytes -= generatedImages.get(first).bytes;
+      generatedImages.delete(first);
+    }
+    return true;
+  }
+  function readGeneratedImage(id) {
+    const entry = generatedImages.get(id);
+    return entry ? { imageId: id, mime: entry.mime, base64: entry.base64 } : null;
+  }
   function event(type, data, broadcast = true) {
     const value = makeEvent(type, { sessionID: sessionId, ...data });
     projection.accept(value);
@@ -98,9 +138,22 @@ export function createCodexState({ sessionId, directory, makeEvent, publish, now
     const store = data => remember(value.id, { ...data, snapshotOrder: snapshotOrder || old?.snapshotOrder || null,
       receiptOrder: historical ? old?.receiptOrder || null : receiptOrder });
     if (value.type === 'userMessage') {
-      const text = publicText((value.content || []).filter(x => x?.type === 'text').map(x => x.text).join('\n')).slice(0, 14000);
+      const textParts = [], files = [];
+      for (const [index, part] of (value.content || []).entries()) {
+        if (part?.type === 'text' && typeof part.text === 'string') {
+          const attachment = index > 0 ? parseAttachmentBlock(part.text) : null;
+          if (attachment) files.push({ name: publicText(attachment.name).slice(0, 180), mime: attachment.mime });
+          else textParts.push(part.text);
+        } else if (part?.type === 'localImage' && typeof part.path === 'string') {
+          const info = displayLocalImage(part.path, directory);
+          files.push({ name: publicText(info.name).slice(0, 180), mime: info.mime });
+        } else if (part?.type === 'image' && typeof part.url === 'string') {
+          files.push(displayImageUrl(part.url));
+        }
+      }
+      const text = publicText(textParts.join('\n')).slice(0, 14000);
       store({ type: value.type, turnId, completed, revision: version, clientId: value.clientId });
-      event('session.inbox.enqueued', { inboxID: value.id, item: { type: 'user', payload: { text } } }, broadcast);
+      event('session.inbox.enqueued', { inboxID: value.id, item: { type: 'user', payload: { text, ...(files.length ? { files } : {}) } } }, broadcast);
       // UserMessage is input history, not a new send, nor evidence that a finished turn is queued.
       if (status !== 'running' && terminalEvent[status]) event(terminalEvent[status], {}, broadcast);
       return;
@@ -121,6 +174,41 @@ export function createCodexState({ sessionId, directory, makeEvent, publish, now
     if (value.type === 'reasoning') {
       store({ type: value.type, turnId, completed, revision: version });
       event(completed ? 'session.reasoning.ended' : 'session.reasoning.started', { assistantMessageID: value.id, ordinal: 0 }, broadcast);
+      return;
+    }
+    if (value.type === 'imageGeneration') {
+      if (typeof value.result === 'string') putGeneratedImage(value.id, value.result);
+      const imgStatus = toolStatus(value);
+      const hasImage = generatedImages.has(value.id);
+      const promptText = typeof value.revisedPrompt === 'string' ? publicText(value.revisedPrompt).slice(0, 2000) : '';
+      const requestDetail = promptText
+        ? { available: true, text: promptText, format: 'text', redacted: false, truncated: false, totalChars: promptText.length, reason: '' }
+        : { available: false, text: '', format: 'text', redacted: false, truncated: false, totalChars: 0, reason: '未提供提示词详情' };
+      const resultDetail = imgStatus === 'running'
+        ? { available: false, text: '', format: 'text', redacted: false, truncated: false, totalChars: 0, reason: '图片仍在生成中' }
+        : imgStatus === 'failed'
+          ? { available: true, text: '图片生成失败', format: 'text', redacted: false, truncated: false, totalChars: 6, reason: '' }
+          : { available: true, text: hasImage ? '图片已生成，可在对话中预览' : '图片已生成', format: 'text', redacted: false, truncated: false, totalChars: 12, reason: '' };
+      details.put(sessionId, value.id, { toolId: value.id, toolName: 'image_generation', status: imgStatus, request: requestDetail, result: resultDetail });
+      store({ type: value.type, turnId, completed, revision: version, toolName: 'image_generation' });
+      if (!old) event('session.tool.input.started', { id: value.id, name: 'image_generation' }, broadcast);
+      event('session.tool.called', {
+        id: value.id,
+        publicTool: {
+          label: '生成图片',
+          summary: imgStatus === 'completed' ? '已生成图片' : imgStatus === 'failed' ? '图片生成失败' : '正在生成图片…',
+          hasDetails: true,
+        },
+      }, broadcast);
+      if (imgStatus !== 'running' || completed) {
+        event(imgStatus === 'failed' ? 'session.tool.failed' : 'session.tool.success', {
+          id: value.id,
+          publicResult: {
+            summary: imgStatus === 'failed' ? '图片生成失败' : '已生成图片',
+            hasDetails: true,
+          },
+        }, broadcast);
+      }
       return;
     }
     const tool = nativeTool(value, directory); if (!tool) return;
@@ -166,7 +254,14 @@ export function createCodexState({ sessionId, directory, makeEvent, publish, now
     get revision() { return revision; }, get activeTurnId() { return activeTurnId; },
     get latestTurnId() { return latestTurnId; }, get status() { return status; },
     terminal: id => terminalTurns.get(id), itemContext: id => items.get(id)?.approvalContext,
-    hasItem: id => items.has(id), readDetail: id => details.get(sessionId, id),
+    hasItem: id => items.has(id),
+    readDetail(id) {
+      const detail = details.get(sessionId, id);
+      if (!detail) return null;
+      const img = readGeneratedImage(id);
+      return img ? { ...detail, image: { mime: img.mime, base64: img.base64 } } : detail;
+    },
+    putGeneratedImage, readGeneratedImage, hasGeneratedImage: id => generatedImages.has(id),
     coveredAt: (turnId, id, order) => { const value = items.get(id); return value?.turnId === turnId && (value.completed || value.snapshotOrder >= order); },
     userId: clientId => [...items].find(([id, item]) => item.type === 'userMessage' && (id === clientId || item.clientId === clientId))?.[0],
     runtimeError() { status = 'failed'; },

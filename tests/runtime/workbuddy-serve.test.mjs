@@ -3,7 +3,36 @@ import { test } from 'node:test';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createWorkBuddyAccountLogin } from '../../src/runtime/workbuddy-account.mjs';
-import { createWorkBuddyServeManager } from '../../src/runtime/workbuddy-serve.mjs';
+import { createWorkBuddyServeManager, prepareWorkBuddySettings } from '../../src/runtime/workbuddy-serve.mjs';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+test('managed Bash applies a process-only rule and migrates only the original bridge deny', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'wb-permissions-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, 'settings.json'), draft = join(root, 'workspace', 'draft.html'), write = 'Write(' + draft + ')';
+  async function prepare(mode) {
+    const stage = await mkdtemp(join(root, 'run-'));
+    const { password, permissionSettings } = await prepareWorkBuddySettings(root, stage, draft, mode);
+    const { permissions } = JSON.parse(await readFile(permissionSettings, 'utf8'));
+    return { password, permissions, saved: JSON.parse(await readFile(file, 'utf8')) };
+  }
+  const first = await prepare();
+  assert.deepEqual(first.permissions, { ask: [write, 'Bash'] });
+  const legacy = { ...first.saved, model: 'fixture', enabledPlugins: { example: true }, permissions: { ask: [write], deny: ['Bash'] } };
+  await writeFile(file, JSON.stringify(legacy));
+  const trusted = await prepare('trusted');
+  assert.equal(trusted.password, first.password);
+  assert.deepEqual(trusted.saved, { ...legacy, permissions: { ask: [write] } });
+  assert.deepEqual(trusted.permissions, { ask: [write], allow: ['Bash'] });
+  assert.deepEqual((await prepare('ask')).permissions, first.permissions);
+  const custom = { ...legacy, permissions: { ask: [write], deny: ['Bash', 'OtherTool'] } };
+  await writeFile(file, JSON.stringify(custom));
+  const configured = await prepare('trusted');
+  assert.deepEqual(configured.saved, custom);
+  assert.deepEqual(configured.permissions.deny, custom.permissions.deny);
+});
 
 test('stopping the bridge closes an unfinished official login and permits a fresh start', { timeout: 2000 }, async () => {
   let starts = 0, stops = 0, endLogin;

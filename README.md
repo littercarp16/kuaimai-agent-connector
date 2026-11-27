@@ -25,6 +25,8 @@ Windows 上的 Codex 需要安装并登录 Windows 原生 CLI。非默认安装�
 
 点击「新建并进入」会建立一个空会话。发送需求时，绫通会附上当前页面的上下文。Agent 保存草稿后可以在原网页预览，再由用户确认发布。
 
+托管的 WorkBuddy CLI 默认在对话中逐次确认 Bash 命令。本机用户可以为共享桥接显式开启 Bash 信任模式；它适用于该桥接上的所有 WorkBuddy 会话。在启动桥接的终端设置 `KM_AGENT_WORKBUDDY_BASH_MODE=trusted`，使用 `status` 返回的 `workBuddyBashMode` 确认启动模式。切换模式需要重启桥接。[开启与关闭示例](docs/WORKBUDDY.md#bash-信任模式)
+
 ### 各 Agent 的接入差异
 
 | Agent | 首次使用和会话来源 |

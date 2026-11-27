@@ -7,7 +7,7 @@ import { windowsPathAccess } from '../../runtime/windows.mjs';
 
 const exec = promisify(execFile), cache = new Map();
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const unavailable = () => ({ pageContext: false });
+const unavailable = () => ({ pageContext: false, attachments: false });
 const incompatible = () => Object.assign(Error('Codex 会话列表协议不兼容'), { code: 'CODEX_PROTOCOL_INCOMPATIBLE' });
 
 // Inspect only local references. A schema is data, never code or a remote URL.
@@ -30,6 +30,33 @@ export function supportsAdditionalContext(schema) {
   return Boolean(typed(map, 'object') && typed(entry, 'object') && typed(kind, 'string') &&
     Array.isArray(kind.enum) && kind.enum.includes('application') && typed(value, 'string') &&
     Array.isArray(entry.required) && entry.required.every(key => ['kind', 'value'].includes(key)));
+}
+
+export function supportsLocalImageInput(schema) {
+  const root = resolve(schema, schema), input = resolve(schema, root?.properties?.input);
+  if (!typed(input, 'array')) return false;
+  const item = resolve(schema, input?.items);
+  const variants = Array.isArray(item?.oneOf) ? item.oneOf : Array.isArray(item?.anyOf) ? item.anyOf : [];
+  let hasText = false, hasLocalImage = false;
+  for (const raw of variants) {
+    const variant = resolve(schema, raw);
+    if (!typed(variant, 'object')) continue;
+    const typeField = resolve(schema, variant.properties?.type);
+    if (!typed(typeField, 'string') || !Array.isArray(typeField.enum)) continue;
+    if (typeField.enum.includes('text')) {
+      const textField = resolve(schema, variant.properties?.text);
+      if (typed(textField, 'string') && Array.isArray(variant.required) &&
+        variant.required.includes('type') && variant.required.includes('text') &&
+        variant.required.every(key => ['type', 'text', 'text_elements'].includes(key))) hasText = true;
+    }
+    if (typeField.enum.includes('localImage')) {
+      const pathField = resolve(schema, variant.properties?.path);
+      if (typed(pathField, 'string') && Array.isArray(variant.required) &&
+        variant.required.includes('type') && variant.required.includes('path') &&
+        variant.required.every(key => ['type', 'path'].includes(key))) hasLocalImage = true;
+    }
+  }
+  return hasText && hasLocalImage;
 }
 
 async function binaryIdentity(file) {
@@ -70,7 +97,10 @@ export async function readCodexCapabilities({ schemaBinary, version }, { run = e
       return JSON.parse(await readFile(file, 'utf8'));
     }));
     if ((await binaryIdentity(schemaBinary)).key !== identity.key) return unavailable();
-    const result = Object.freeze({ pageContext: schemas.every(supportsAdditionalContext) });
+    const result = Object.freeze({
+      pageContext: schemas.every(supportsAdditionalContext),
+      attachments: schemas.every(supportsLocalImageInput),
+    });
     if (cache.size >= 8) cache.delete(cache.keys().next().value);
     cache.set(key, result);
     return result;
@@ -89,5 +119,8 @@ export async function probeCodexProtocol(rpc, discovery, { readCapabilities = re
   if (!record(page) || !Array.isArray(page.data) || page.data.length > 1 ||
     !(page.nextCursor == null || typeof page.nextCursor === 'string')) throw incompatible();
   const capabilities = await readCapabilities(discovery).catch(unavailable);
-  return Object.freeze({ pageContext: capabilities?.pageContext === true });
+  return Object.freeze({
+    pageContext: capabilities?.pageContext === true,
+    attachments: capabilities?.attachments === true,
+  });
 }

@@ -6,8 +6,10 @@ import { probeCodexProtocol } from './codex-protocol.mjs';
 import { createCodexState, publicText, nativeKey } from './codex-state.mjs';
 import { publicQuestion, questionAnswer, publicApproval } from '../../session/shared-state.mjs';
 import { detailPolicy } from '../../tools/tool-details.mjs';
+import { FILE_LIMITS, normalizeUploads } from '../../tools/prompt-files.mjs';
 import { addProjectNames } from './codex-projects.mjs';
 import { normalizePageContext, codexPageContext } from '../../protocol/page-context.mjs';
+import { buildCodexInput, cleanupStagedFiles, searchDirectoryFiles } from './codex-files.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRAPPER = /^ses_codex_([0-9a-f]{32})$/;
@@ -35,7 +37,7 @@ function unwrap(id) {
 }
 
 /** Connects to a running Codex shared daemon. */
-export function createCodexAdapter({ directory = process.cwd(), sessionScope = 'workspace', discover = discoverCodexDaemon, connect = connectCodexRpc, probe = probeCodexProtocol,
+export function createCodexAdapter({ directory = process.cwd(), sessionScope = 'workspace', uploadDir, discover = discoverCodexDaemon, connect = connectCodexRpc, probe = probeCodexProtocol,
   now = Date.now, healthTtlMs = 2000, requestTimeoutMs = 5000, resolvedTimeoutMs = 5000,
   maxPages = 4, maxBytes = 2 * 1024 * 1024 } = {}) {
   if (!['workspace', 'agent'].includes(sessionScope)) throw Error('Unknown Codex session scope');
@@ -103,7 +105,7 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           const openingEpoch = epoch;
           // A single tool-rich turn may exceed the generic 1 MiB RPC default.
           // Keep transport bounded; history and live buffers retain their own smaller budgets.
-          const rpc = await connect({ socketPath: discovered.socketPath, version: discovered.version, maxBytes: 4 * 1024 * 1024 });
+          const rpc = await connect({ socketPath: discovered.socketPath, version: discovered.version, maxBytes: 16 * 1024 * 1024 });
           let protocol;
           try { protocol = await probe(rpc, discovered); }
           catch (error) { rpc.close(); throw error; }
@@ -158,13 +160,37 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     if (!valid) { invalidateContext(context, true); throw err('CODEX_SCOPE_CHANGED'); }
     context.state.setModel(response.thread); return response.thread;
   }
+  function offloadItemImage(item, context) {
+    if (!context || !item || item.type !== 'imageGeneration' || typeof item.result !== 'string') return item;
+    context.state.putGeneratedImage(item.id, item.result);
+    const { result: _omitted, ...rest } = item;
+    return rest;
+  }
+  function offloadPageImages(method, page, context) {
+    if (!context || !Array.isArray(page?.data)) return page;
+    if (method === 'thread/turns/list') {
+      let changed = false;
+      const nextData = page.data.map(turn => {
+        if (!Array.isArray(turn?.items) || !turn.items.some(i => i?.type === 'imageGeneration' && typeof i.result === 'string')) return turn;
+        changed = true;
+        return { ...turn, items: turn.items.map(i => offloadItemImage(i, context)) };
+      });
+      return changed ? { ...page, data: nextData } : page;
+    }
+    if (method === 'thread/items/list') {
+      if (!page.data.some(entry => entry?.item?.type === 'imageGeneration' && typeof entry.item.result === 'string')) return page;
+      return { ...page, data: page.data.map(entry => entry?.item ? { ...entry, item: offloadItemImage(entry.item, context) } : entry) };
+    }
+    return page;
+  }
   async function pages(capture, method, params, context, signal, initial) {
     const data = [], cursors = new Set(); let bytes = 0, cursor;
     for (let index = 0; index < pageLimit; index++) {
-      const page = index === 0 && initial ? initial : await request(capture, method, { ...params, ...(cursor ? { cursor } : {}) }, context, signal);
+      const rawPage = index === 0 && initial ? initial : await request(capture, method, { ...params, ...(cursor ? { cursor } : {}) }, context, signal);
       check(capture, context);
-      if (!Array.isArray(page?.data)) throw err('CODEX_READ_FAILED');
-      if (method === 'thread/list' && page.data.length > params.limit) throw err('CODEX_DISCOVERY_LIMIT');
+      if (!Array.isArray(rawPage?.data)) throw err('CODEX_READ_FAILED');
+      if (method === 'thread/list' && rawPage.data.length > params.limit) throw err('CODEX_DISCOVERY_LIMIT');
+      const page = offloadPageImages(method, rawPage, context);
       bytes += Buffer.byteLength(JSON.stringify(page));
       if (bytes > byteLimit) {
         // Only omit older complete history pages after the newest page was read.
@@ -451,6 +477,10 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
       // starts while that earlier notification is awaiting validation.
       event = { ...event, resolvedLocally: context.wire.get(event.params.requestId)?.state === 'submitting' };
     }
+    if ((event.method === 'item/started' || event.method === 'item/completed') &&
+      event.params?.item?.type === 'imageGeneration' && typeof event.params.item.result === 'string') {
+      event = { ...event, params: { ...event.params, item: offloadItemImage(event.params.item, context) } };
+    }
     if (!context.warm || context.warming) {
       const bytes = Buffer.byteLength(JSON.stringify(event));
       if (context.buffer.length >= 512 || context.bufferBytes + bytes > byteLimit) { invalidateContext(context); return; }
@@ -501,30 +531,51 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     if (!value) { await readShared(id); check(context.capture, context); value = context.state.readDetail(toolId); }
     await verify(context); check(context.capture, context); return value;
   }
+  async function readGeneratedImage(id, imageId) {
+    const context = await contextFor(id); check(context.capture, context);
+    await verify(context); check(context.capture, context);
+    let value = context.state.readGeneratedImage(imageId);
+    if (!value) { await readShared(id); check(context.capture, context); value = context.state.readGeneratedImage(imageId); }
+    await verify(context); check(context.capture, context); return value;
+  }
   async function listPending(id, kind) {
     const context = await contextFor(id); check(context.capture, context);
     await warm(context); check(context.capture, context); await verify(context); check(context.capture, context);
     await drain(context); check(context.capture, context);
     return publicPending(context, kind);
   }
+  async function searchWorkspaceFiles(id, query = '') {
+    const context = await contextFor(id); check(context.capture, context);
+    if (context.capture.protocol?.attachments !== true) throw err('CODEX_READ_FAILED');
+    await verify(context); check(context.capture, context);
+    const files = await searchDirectoryFiles(context.scope, query);
+    check(context.capture, context);
+    return files;
+  }
   function sendShared(id, text, { requestId, signal, uploads = [], references = [], pageContext, assertCurrent = () => {} } = {}) {
     let context;
     try {
       context = get(id);
-      if (signal?.aborted || !Array.isArray(uploads) || !Array.isArray(references) || uploads.length || references.length ||
+      if (signal?.aborted || !Array.isArray(uploads) || !Array.isArray(references) ||
+        uploads.length + references.length > FILE_LIMITS.count ||
+        references.some(item => typeof item !== 'string' || !item || item.length > 500) ||
         typeof text !== 'string' || !text.trim() || text.length > 100000 || typeof requestId !== 'string' || !requestId || requestId.length > 200) throw err('NOT_SUBMITTED');
+      const hasFiles = uploads.length > 0 || references.length > 0;
+      if (hasFiles && context.capture.protocol?.attachments !== true) throw err('NOT_SUBMITTED');
+      if (uploads.length) normalizeUploads(uploads);
       const page = normalizePageContext(pageContext);
       if (page && context.capture.protocol?.pageContext !== true) throw err('NOT_SUBMITTED');
       const additionalContext = codexPageContext(page);
-      const signature = hash(JSON.stringify({ text, pageContext: page || null })), sendKey = JSON.stringify([id, requestId]), old = sends.get(sendKey);
+      const signature = hash(JSON.stringify({ text, pageContext: page || null, uploads, references })), sendKey = JSON.stringify([id, requestId]), old = sends.get(sendKey);
       if (old) { if (old.signature !== signature) throw err('NOT_SUBMITTED'); return old.promise; }
       // Never evict an unknown/successful submission and accidentally resend it.
-      const bytes = Buffer.byteLength(text) + Buffer.byteLength(JSON.stringify(additionalContext || {})) + 256;
+      const bytes = Buffer.byteLength(text) + Buffer.byteLength(JSON.stringify(additionalContext || {})) + (uploads.length + references.length) * 256 + 256;
       if (sends.size >= 256 || sendBytes + bytes > byteLimit) throw err('NOT_SUBMITTED');
       const entry = { signature, bytes };
       sendBytes += bytes;
       entry.promise = Promise.resolve().then(async () => {
         let submitted = false;
+        let stagedPaths = [];
         const guard = () => { check(context.capture, context); assertCurrent(); if (signal?.aborted) throw err('NOT_SUBMITTED'); };
         try {
           guard(); await health(); guard(); await warm(context, signal); guard();
@@ -533,8 +584,17 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           if (thread.canAcceptDirectInput === false) throw err('NOT_SUBMITTED');
           const turnId = context.state.activeTurnId;
           if (thread.status?.type === 'active' && !turnId) throw err('NOT_SUBMITTED');
+          let input = [{ type: 'text', text, text_elements: [] }];
+          let fileSummary = [];
+          if (hasFiles) {
+            const built = await buildCodexInput({ text, uploads, references, directory: context.scope, uploadDir, now });
+            stagedPaths = built.stagedPaths;
+            input = built.input;
+            fileSummary = built.fileSummary;
+            guard();
+          }
           const clientId = 'km_' + hash(JSON.stringify([id, requestId])).slice(0, 48);
-          const params = { threadId: context.nativeId, input: [{ type: 'text', text, text_elements: [] }], clientUserMessageId: clientId,
+          const params = { threadId: context.nativeId, input, clientUserMessageId: clientId,
             ...(turnId ? { expectedTurnId: turnId } : {}), ...(additionalContext ? { additionalContext } : {}) };
           submitted = true;
           let result;
@@ -556,9 +616,12 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
           // Continue scope enforcement independently; it may disconnect the
           // reader on a real move but cannot undo a native acceptance receipt.
           void verify(context).catch(()=>{});
-          return { id: clientId, payload: { text }, accepted:true,delivery:'accepted',nativeEcho:true,nativeTurnId:acceptedTurnId };
+          return { id: clientId, payload: { text, ...(fileSummary.length ? { files: fileSummary } : {}) }, accepted:true,delivery:'accepted',nativeEcho:true,nativeTurnId:acceptedTurnId };
         } catch (error) {
-          if (!submitted) { sends.delete(sendKey); sendBytes -= bytes; throw err('NOT_SUBMITTED'); }
+          if (!submitted) {
+            await cleanupStagedFiles(stagedPaths);
+            sends.delete(sendKey); sendBytes -= bytes; throw err('NOT_SUBMITTED');
+          }
           throw err('CODEX_RESULT_UNKNOWN');
         }
       });
@@ -624,11 +687,14 @@ export function createCodexAdapter({ directory = process.cwd(), sessionScope = '
     }
   }
   const capabilities = Object.freeze({ send: true, interrupt: true, questions: true, approvals: true, toolDetails: true,
-    attachments: false, fileSearch: false, newSession: true, followSessions: false,
+    get attachments() { return !closed && current?.protocol?.attachments === true; },
+    get workspaceFiles() { return !closed && current?.protocol?.attachments === true; },
+    get fileSearch() { return !closed && current?.protocol?.attachments === true; },
+    newSession: true, followSessions: false,
     get pageContext() { return !closed && current?.protocol?.pageContext === true; } });
   return {
     descriptor: Object.freeze({ id: 'codex', status: 'native', capabilities }), capabilities,
-    health, listSessions, createSharedSession, bindSession, readShared, watch, sendShared, interruptShared, readToolDetail,
+    health, listSessions, createSharedSession, bindSession, readShared, watch, sendShared, interruptShared, readToolDetail, readGeneratedImage, searchWorkspaceFiles,
     listQuestions: id => listPending(id, 'question'), listApprovals: id => listPending(id, 'approval'),
     replyQuestion: (id, qid, answers, options) => respondPending(id, qid, 'question', answers, options),
     rejectQuestion: (id, qid, options) => respondPending(id, qid, 'question', null, options, true),

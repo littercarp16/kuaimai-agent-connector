@@ -16,10 +16,11 @@ export async function until(predicate) {
 }
 
 // In-memory App Server contract fixture. It cannot start Codex or access its files.
-export async function fixture(t, { version = '0.166.0', pageContext = false, ...options } = {}) {
+export async function fixture(t, { version = '0.166.0', pageContext = false, attachments = false, ...options } = {}) {
   const tempRoot = path.join(tmpdir(), 'opencode'); await mkdir(tempRoot, { recursive: true });
   const root = await mkdtemp(path.join(tempRoot, 'codex-adapter-'));
   const directory = await realpath(root);
+  const uploadDir = path.join(directory, '.fixture-uploads');
   await mkdir(path.join(directory, 'child'));
   const thread = { id: THREAD, sessionId: OTHER, cwd: directory, source: 'cli', parentThreadId: null,
     name: '原生测试', preview: '', status: { type: 'idle' }, turns: [], model: 'fixture-model', modelProvider: 'openai' };
@@ -49,7 +50,7 @@ export async function fixture(t, { version = '0.166.0', pageContext = false, ...
           if (method === 'thread/turns/list') return { data: structuredClone([...turns].reverse()), nextCursor: null };
           if (method === 'thread/items/list') return { data: [], nextCursor: null };
           if (method === 'turn/start') {
-            const item = { ...user(params.clientUserMessageId, params.input[0].text), clientId: params.clientUserMessageId };
+            const item = { id: params.clientUserMessageId, type: 'userMessage', content: structuredClone(params.input), clientId: params.clientUserMessageId };
             const value = turn('turn-new', 'inProgress', [item]); turns.push(value); thread.status = { type: 'active', activeFlags: [] };
             return { turn: structuredClone(value) };
           }
@@ -69,12 +70,12 @@ export async function fixture(t, { version = '0.166.0', pageContext = false, ...
   t.after(async () => { await rm(root, { recursive: true, force: true }); });
   const { createCodexAdapter } = await import('../../src/adapters/codex/codex.mjs');
   const createAdapter = extra => {
-    const value = createCodexAdapter({ directory, discover: async () => { discoveryCount++; return discovery; },
-      connect: async () => { connectCount++; return rpc; }, probe: async () => ({ pageContext }), now: () => clock, resolvedTimeoutMs: 100, ...options, ...extra });
+    const value = createCodexAdapter({ directory, uploadDir, discover: async () => { discoveryCount++; return discovery; },
+      connect: async () => { connectCount++; return rpc; }, probe: async () => ({ pageContext, attachments }), now: () => clock, resolvedTimeoutMs: 100, ...options, ...extra });
     t.after(() => value.close()); return value;
   };
   const adapter = createAdapter();
-  return { adapter, createAdapter, rpc, thread, threads, turns, calls, responses, handlers, directory,
+  return { adapter, createAdapter, rpc, thread, threads, turns, calls, responses, handlers, directory, uploadDir,
     receive,
     emit(method, params, id) { const event = receive({ method, params, ...(id !== undefined ? { id } : {}) }); for (const fn of [...subscribers]) fn(event); },
     get discoveryCount() { return discoveryCount; }, get connectCount() { return connectCount; },

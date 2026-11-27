@@ -3,7 +3,7 @@ export const EXTENSION_ID = 'ahibjmmejhcabodghbdmdihdgkncaeca';
 export const ORIGINS = Object.freeze(['http://lt.com:8085', 'http://local.lt.com:8251']);
 export const MAX_BODY = 16 * 1024 * 1024;
 const get = new Set(['/v1/connect/discover','/v1/health','/v1/snapshot','/v1/events','/v1/sessions','/v1/sources','/v1/protocol','/v1/questions','/v1/approvals','/v1/codex/desktop','/v1/qwen/desktop']);
-const post = new Set(['/v1/connect/claim','/v1/connect/direct-resume','/v1/connect/direct-revoke','/v1/run','/v1/stop','/v1/disconnect','/v1/reset','/v1/bind','/v1/unbind','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/question/reply','/v1/question/reject','/v1/approval/reply','/v1/codex/desktop/restart','/v1/qwen/desktop/ensure']);
+const post = new Set(['/v1/connect/claim','/v1/connect/direct-resume','/v1/connect/direct-revoke','/v1/run','/v1/stop','/v1/disconnect','/v1/reset','/v1/bind','/v1/unbind','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/media/image','/v1/files/search','/v1/session/new','/v1/question/reply','/v1/question/reject','/v1/approval/reply','/v1/codex/desktop/restart','/v1/qwen/desktop/ensure']);
 export function validateRequest(value) {
   if (!value || !/^[\w-]{1,80}$/.test(value.id || '') || !ORIGINS.includes(value.origin)) throw Error('不受支持的网页来源或请求');
   const url = new URL(value.url);

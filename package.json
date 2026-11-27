@@ -1,6 +1,6 @@
 {
   "name": "kuaimai-agent-connector",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Local Agent bridge for Kuaimai and Lingtong with Codex, Qwen and WorkBuddy CLI sessions",
   "license": "UNLICENSED",
   "repository": {

@@ -18,6 +18,30 @@ macOS 连接器使用 WorkBuddy 桌面安装包内的 CLI，以 `--serve` 启动
 
 绫通前端的 `node tests/browser/kmPageAgent.cjs --run --workbuddy-login` 使用无头浏览器、本机模拟账号和开页计数器，覆盖两个网页并发登录及补开。需要真实 CLI 的人工验收使用 `--run --workbuddy-live --allow-system-browser`，官方 CLI 可能打开系统浏览器。该模式使用本机测试模型核验会话创建、重启续聊及文件审批。
 
+### Bash 信任模式
+
+源码版默认以 `ask` 模式启动。绫通显示 WorkBuddy 请求的命令和会话工作目录；「允许」或「拒绝」只答复当前调用。本机用户可在启动桥接时选择 `trusted`，交由 WorkBuddy 的原生 Bash 允许规则处理。所有通过该实例授权的网页及其托管 WorkBuddy 会话共用此设置，命令使用当前系统账号的权限。WorkBuddy 自身的强制限制和自定义拒绝规则仍生效。外接 CLI 服务使用它自己的配置。
+
+先结束当前任务，停止已有共享实例，再从连接器项目目录启动。以下示例使用绫通本地开发来源。
+
+**macOS**
+
+```sh
+KM_AGENT_WORKBUDDY_BASH_MODE=trusted node ./headless.mjs start --origin http://local.lt.com:8251
+```
+
+**Windows PowerShell**
+
+```powershell
+$env:KM_AGENT_WORKBUDDY_BASH_MODE = 'trusted'
+node ./headless.mjs start --origin http://local.lt.com:8251
+Remove-Item Env:KM_AGENT_WORKBUDDY_BASH_MODE
+```
+
+运行 `node ./headless.mjs status --origin http://local.lt.com:8251`，确认 `workBuddyBashMode` 为 `trusted`，再回到绫通连接。网页的「复制连接请求」可以复用已经启动的实例。恢复逐次审批时，停止实例，在没有上述环境变量的终端重新启动，确认状态为 `ask`。已授权多个来源时，`stop --origin` 只断开指定来源，最后一个来源断开后共享进程退出。原有 CLI 会话可以重新选择；官方账号可能需要重新登录。
+
+回传草稿时，可让 WorkBuddy 使用本机安装的 `lingtong-kmmdtable` 技能和 `lingtong-cli`，核对应用、页面和草稿基准版本后保存，再回读核验。连接器的 Bash 信任模式和绫通账号对页面的编辑权限分别生效。
+
 ## MCP 成果上报
 
 > **1.3.0源码已增加自动跟随/准备：**新版不再要求每次手选WB候选，默认自动查看、手选锁定可恢复，按Agent分组；稳定网关可自动准备运行时，见[AUTOMATIC.md](AUTOMATIC.md)。下文首版手选流程是旧部署兼容；本机旧实例及已有缓存尚未擅自换版，不能把源码实现当作已上线。

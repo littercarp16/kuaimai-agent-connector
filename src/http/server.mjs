@@ -307,7 +307,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         follow.init(client,false);clients.set(token,client);connected(client);requestLog.client(client);code=String(randomInt(100000,1000000));codeExpires=now()+10*60e3;onPairCode(code);
         await checkHealth();return json(res,200,{ok:true,data:{token,expiresAt:client.expires,snapshot:snapshot(client)}});
       }
-      if(!['/v1/snapshot','/v1/events','/v1/run','/v1/demo','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/codex/desktop/restart','/v1/qwen/desktop','/v1/qwen/desktop/ensure'].includes(req.url))fail(404,'接口不存在');
+      if(!['/v1/snapshot','/v1/events','/v1/run','/v1/demo','/v1/stop','/v1/disconnect','/v1/reset','/v1/sessions','/v1/sources','/v1/bind','/v1/unbind','/v1/protocol','/v1/ui/ack','/v1/follow','/v1/tool/detail','/v1/media/image','/v1/files/search','/v1/session/new','/v1/questions','/v1/question/reply','/v1/question/reject','/v1/approvals','/v1/approval/reply','/v1/codex/desktop','/v1/codex/desktop/restart','/v1/qwen/desktop','/v1/qwen/desktop/ensure'].includes(req.url))fail(404,'接口不存在');
       const client=authenticate(req,origin);requestLog.client(client);
       if(['/v1/qwen/desktop','/v1/qwen/desktop/ensure'].includes(req.url)){
         if(!qwenDesktop)fail(404,'千问自动准备未启用，请更新本机连接器');
@@ -377,7 +377,7 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
               if(operation.source!==provider||operation.allowControl!==input.allowControl)fail(409,'请求标识已用于其他操作');
             }else{
               if(wb&&workBuddyServeManager.status().phase!=='ready')fail(409,'请先完成 WorkBuddy CLI 连接');
-              if(client.bindingBusy||client.newSessionBusy||originalHub&&sourceBusy(originalHub,writingHub===originalHub?1:0))fail(409,'请等待当前会话操作结束');
+              if(client.bindingBusy||client.newSessionBusy||originalHub&&originalHub.inflightWrites>(writingHub===originalHub?1:0)||!canSwitch(client,{id:'__new__'}))fail(409,'请等待当前会话操作结束');
               rate(origin+':'+provider+'-create',20);
               client.newSessionBusy=true;
               follow.pin(client);
@@ -436,6 +436,13 @@ export function createConnector({adapter,allowedOrigins=['http://127.0.0.1:4173'
         const assertCurrent=()=>{if(!client.active||client.expires<now())fail(401,'授权已失效');if(!originalHub||client.hub!==originalHub||client.bindingEpoch!==epoch||input.sessionId!==originalHub.session.id||originalHub.transport!=='connected'||originalHub.transportEpoch!==transportEpoch)fail(409,'详情所属会话或原生连接已变化，未返回内容');};assertCurrent();
         const native=nativeFor(client);if(typeof input.toolId!=='string'||!/^[\w:.-]{1,140}$/.test(input.toolId))fail(400,'工具标识无效');if(!originalHub.projection.value.activities.some(a=>a.id==='tool:'+input.toolId&&['tool','skill'].includes(a.kind)))fail(404,'当前会话没有此工具记录');if(!capabilities(client).toolDetailFetch||!native.readToolDetail)fail(409,'该适配器未提供工具详情');
         let detail;try{detail=await native.readToolDetail(originalHub.session.id,input.toolId);}catch{assertCurrent();fail(409,'详情读取失败或作用域已变化，未返回内容');}assertCurrent();if(!detail||detail.toolId!==input.toolId)fail(404,'工具详情已过期或不可用，请重连核验');return json(res,200,{ok:true,data:detail});
+      }
+      if(req.url==='/v1/media/image'&&req.method==='POST'){
+        if(isWorkBuddy(client))fail(409,'WorkBuddy 协作上报不提供生成图片预览');
+        const originalHub=client.hub,epoch=client.bindingEpoch,transportEpoch=originalHub?.transportEpoch,input=await body(req,['sessionId','imageId']);
+        const assertCurrent=()=>{if(!client.active||client.expires<now())fail(401,'授权已失效');if(!originalHub||client.hub!==originalHub||client.bindingEpoch!==epoch||input.sessionId!==originalHub.session.id||originalHub.transport!=='connected'||originalHub.transportEpoch!==transportEpoch)fail(409,'图片所属会话或原生连接已变化，未返回内容');};assertCurrent();
+        const native=nativeFor(client);if(typeof input.imageId!=='string'||!/^[\w:.-]{1,140}$/.test(input.imageId))fail(400,'图片标识无效');if(!originalHub.projection.value.activities.some(a=>a.id==='tool:'+input.imageId&&a.toolName==='image_generation'))fail(404,'当前会话没有此生成图片');if(typeof native.readGeneratedImage!=='function')fail(409,'该适配器未提供生成图片预览');
+        let media;try{media=await native.readGeneratedImage(originalHub.session.id,input.imageId);}catch{assertCurrent();fail(409,'图片读取失败或作用域已变化，未返回内容');}assertCurrent();if(!media||media.imageId!==input.imageId)fail(404,'生成图片已过期或不可用');return json(res,200,{ok:true,data:media});
       }
       if(['/v1/sessions','/v1/sources'].includes(req.url)&&req.method==='GET'){
         if(req.url==='/v1/sources'&&!workBuddy&&!enableMultiAgentFollow)fail(404,'接口不存在');

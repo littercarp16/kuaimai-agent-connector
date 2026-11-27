@@ -144,11 +144,36 @@ test('当前 CLI 复用兼容的较新后台，拒绝不兼容协议并升级旧
   status.workBuddySessionSelection = true;
   await assert.rejects(ensureService({ origin, directory, requireWorkBuddy: true }), /尚不支持 WorkBuddy 网页读取审批/);
   status.workBuddyWebFetchApproval = true;
+  await assert.rejects(ensureService({ origin, directory, requireWorkBuddy: true }), /尚不支持 WorkBuddy Bash 模式/);
+  status.workBuddyBashMode = 'ask';
   assert.deepEqual(await ensureService({ origin, directory, requireWorkBuddy: true }), { ...status, reused: true });
-  assert.deepEqual(actions.slice(2), ['status', 'status', 'status']);
+  assert.deepEqual(actions.slice(2), ['status', 'status', 'status', 'status']);
   const upgraded = await ensureService({ origin, directory });
   assert.equal(upgraded.version, VERSION);
   assert.notEqual(upgraded.pid, status.pid);
   assert.equal(upgraded.reused, false);
-  assert.deepEqual(actions.slice(5), ['status', 'status', 'stop']);
+  assert.deepEqual(actions.slice(6), ['status', 'status', 'stop']);
+});
+
+test('explicit WorkBuddy Bash mode cannot silently reuse a different shared service', async t => {
+  const directory = await mkdtemp('/private/tmp/km-code-bash-');
+  const socketPath = join(directory, 'control.sock');
+  const server = createControlServer({ allowHalfOpen: true }, socket => {
+    socket.on('data', () => {});
+    socket.on('end', () => socket.end(JSON.stringify({ ok: true, data: {
+      version: VERSION, controlProtocol: 1, state: 'running', workBuddyBashMode: 'ask',
+    } })));
+  });
+  server.listen(socketPath); await once(server, 'listening'); await chmod(socketPath, 0o600);
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }); });
+  const old = process.env.KM_AGENT_WORKBUDDY_BASH_MODE;
+  try {
+    process.env.KM_AGENT_WORKBUDDY_BASH_MODE = 'trusted';
+    await assert.rejects(ensureService({ origin, directory }), /Bash 模式与本机设置不同/);
+    process.env.KM_AGENT_WORKBUDDY_BASH_MODE = 'ask';
+    assert.equal((await ensureService({ origin, directory })).reused, true);
+  } finally {
+    if (old === undefined) delete process.env.KM_AGENT_WORKBUDDY_BASH_MODE;
+    else process.env.KM_AGENT_WORKBUDDY_BASH_MODE = old;
+  }
 });

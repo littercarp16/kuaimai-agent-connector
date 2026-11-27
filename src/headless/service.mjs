@@ -110,7 +110,7 @@ export async function runService({ origin, directory = sharedDirectory(), port =
   let server, closing = false, shutdownRequested = false, ownsControlSocket = false, browserSetup;
   const publicStatus = requestedOrigin => {
     const { endpoint, instanceId, state, origins } = host.status();
-    return { version: VERSION, controlProtocol: CONTROL_PROTOCOL, endpoint, instanceId, state: shutdownRequested ? 'stopping' : state, origin: requestedOrigin ?? origins[0] ?? null, origins, pid: process.pid, loginStartup: false, qwenDesktopPreparation: true, workBuddyDesktopPreparation: !!workBuddyServeManager, workBuddySessionSelection: true, workBuddyWebFetchApproval: true, logging: logger.status() };
+    return { version: VERSION, controlProtocol: CONTROL_PROTOCOL, endpoint, instanceId, state: shutdownRequested ? 'stopping' : state, origin: requestedOrigin ?? origins[0] ?? null, origins, pid: process.pid, loginStartup: false, qwenDesktopPreparation: true, workBuddyDesktopPreparation: !!workBuddyServeManager, workBuddySessionSelection: true, workBuddyWebFetchApproval: true, workBuddyBashMode: workBuddyServeManager?.bashMode ?? 'external', logging: logger.status() };
   };
   const fatal = error => logger.error('process.uncaught_exception', { instanceId: host.status().instanceId, error });
   process.on('uncaughtExceptionMonitor', fatal);
@@ -218,11 +218,18 @@ export async function ensureService({ origin, directory = sharedDirectory(), por
     try {
       const status = await control(directory, { action: 'status' });
       if (status?.controlProtocol !== CONTROL_PROTOCOL || !/^\d+\.\d+\.\d+$/.test(status.version || '')) throw Error('已有连接器的本机控制协议不兼容，请使用匹配的 npm 版本');
+      const requestedMode = process.env.KM_AGENT_WORKBUDDY_BASH_MODE;
+      if (status.state === 'running' && ['ask', 'trusted'].includes(requestedMode) && status.workBuddyBashMode !== requestedMode) {
+        throw Error('已有桥接的 WorkBuddy Bash 模式与本机设置不同，请先关闭该桥接，再以所选模式启动');
+      }
       if (requireWorkBuddy && status.state === 'running' && status.workBuddySessionSelection !== true) {
         throw Error('正在运行的连接器不支持 WorkBuddy。请待现有任务结束后升级连接器，再执行本次请求。');
       }
       if (requireWorkBuddy && status.state === 'running' && status.workBuddyWebFetchApproval !== true) {
         throw Error('正在运行的连接器尚不支持 WorkBuddy 网页读取审批。请待现有任务结束后停止旧连接器，再执行网页复制的新连接请求。');
+      }
+      if (requireWorkBuddy && status.state === 'running' && !status.workBuddyBashMode) {
+        throw Error('正在运行的连接器尚不支持 WorkBuddy Bash 模式。请待现有任务结束后停止旧连接器，再重新连接。');
       }
       return status;
     } catch (error) { if (missingService(error)) return null; throw error; }

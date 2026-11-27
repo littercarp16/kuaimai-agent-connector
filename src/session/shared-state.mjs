@@ -4,7 +4,7 @@ import{PROTOCOL,COMMANDS}from'../protocol/protocol.mjs';
 import{redactText}from'../tools/display-safety.mjs';
 const M=globalThis.KmAgentModel;
 const TERMINALS={'session.execution.succeeded':'completed','session.execution.failed':'failed','session.execution.interrupted':'interrupted'};
-const interruptionCode=(status,code)=>status==='interrupted'&&code==='workbuddy_unsupported_permission'?code:null;
+const interruptionCode=(status,code)=>status==='interrupted'&&['workbuddy_unsupported_permission','workbuddy_draft_path_required','workbuddy_preview_server_unsupported'].includes(code)?code:null;
 const clamp=(value,max=14000)=>String(value??'').slice(0,max);
 const fileMeta=files=>Array.isArray(files)?files.slice(0,5).map((f,i)=>({name:clamp(f?.name||'附件'+(i+1),180),mime:clamp(f?.mime||'',70)})):[];
 
